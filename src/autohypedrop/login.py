@@ -37,7 +37,12 @@ from autohypedrop.notify import (
 )
 from autohypedrop.outcome import ExitCode, Outcome, RunResult, StopRun
 from autohypedrop.safety import Budget, Pacer, SafeActions
-from autohypedrop.session import ProfileInUseError, ensure_logged_in, launch_profile
+from autohypedrop.session import (
+    ProfileInUseError,
+    ProfileLock,
+    ensure_logged_in,
+    launch_profile,
+)
 
 log = get_logger(__name__)
 
@@ -217,20 +222,30 @@ def login(settings: Settings, notifiers: Sequence[Notifier] | None = None) -> in
 
     settings.profile_dir.mkdir(parents=True, exist_ok=True)
     executable = settings.chromium_executable or bundled_chromium()
-    print(INSTRUCTIONS.format(url=settings.base_url, profile=settings.profile_dir), flush=True)
-    browser = start_browser(chromium_args(executable, settings))
-    log.info("login_browser_open", profile=str(settings.profile_dir), link=link)
-    if link:
-        print(f"Login screen: {link}", flush=True)
-        broadcast(chat, LOGIN_READY.format(link=link, minutes=settings.login_timeout_minutes))
-
+    # Hold the profile while the plain browser has it, so no run opens it too.
+    lock = ProfileLock(settings.profile_dir)
     try:
-        browser.wait(timeout=settings.login_timeout_minutes * 60)
-    except subprocess.TimeoutExpired:
-        log.warning("login_timeout", minutes=settings.login_timeout_minutes)
-        print("Time is up; closing the browser.", flush=True)
-        _close(browser)
-    log.info("login_browser_closed", returncode=browser.returncode)
+        lock.acquire()
+    except ProfileInUseError as exc:
+        print(f"Cannot start the login browser: {exc}", file=sys.stderr)
+        return ExitCode.ERROR
+    try:
+        print(INSTRUCTIONS.format(url=settings.base_url, profile=settings.profile_dir), flush=True)
+        browser = start_browser(chromium_args(executable, settings))
+        log.info("login_browser_open", profile=str(settings.profile_dir), link=link)
+        if link:
+            print(f"Login screen: {link}", flush=True)
+            broadcast(chat, LOGIN_READY.format(link=link, minutes=settings.login_timeout_minutes))
+
+        try:
+            browser.wait(timeout=settings.login_timeout_minutes * 60)
+        except subprocess.TimeoutExpired:
+            log.warning("login_timeout", minutes=settings.login_timeout_minutes)
+            print("Time is up; closing the browser.", flush=True)
+            _close(browser)
+        log.info("login_browser_closed", returncode=browser.returncode)
+    finally:
+        lock.release()
 
     print("Checking the session...", flush=True)
     code, text, chat_text, urgent = _check(settings)

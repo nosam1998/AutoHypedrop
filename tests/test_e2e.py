@@ -120,6 +120,23 @@ def test_profile_already_open_is_reported(settings: Settings):
             first.close()
 
 
+def test_profile_lock_is_released_when_browser_closes(settings: Settings):
+    with sync_playwright() as playwright:
+        session.launch_profile(playwright, settings).close()
+        session.launch_profile(playwright, settings).close()
+
+
+def test_profile_lock_blocks_a_second_holder(settings: Settings):
+    first = session.ProfileLock(settings.profile_dir)
+    first.acquire()
+    try:
+        with pytest.raises(session.ProfileInUseError):
+            session.ProfileLock(settings.profile_dir).acquire()
+    finally:
+        first.release()
+    session.ProfileLock(settings.profile_dir).acquire()
+
+
 def test_verify_session(monkeypatch: pytest.MonkeyPatch, settings: Settings):
     fake = FakeSite(boxes=[Box("Daily Box")])
     monkeypatch.setattr(login, "launch_profile", routed(fake))
@@ -189,6 +206,39 @@ def test_login_opens_plain_browser_then_verifies(
     assert not any("remote-debugging" in a or "enable-automation" in a for a in browser.args)
     # A local login is watched in the terminal, so nothing goes to Discord.
     assert recorder.sent == []
+
+
+def test_login_holds_profile_lock_while_browser_is_open(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    locked: list[bool] = []
+
+    class LockCheckingBrowser(FakeBrowser):
+        def wait(self, timeout: float | None = None) -> int:
+            try:
+                session.ProfileLock(settings.profile_dir).acquire()
+                locked.append(False)
+            except session.ProfileInUseError:
+                locked.append(True)
+            return super().wait(timeout)
+
+    monkeypatch.setattr(login, "start_browser", lambda args: LockCheckingBrowser(args))
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+
+    # The session check after the browser closes must find the lock released.
+    assert login.login(settings) == ExitCode.SUCCESS
+    assert locked == [True]
+
+
+def test_login_refuses_while_profile_is_in_use(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    browsers = fake_popen(monkeypatch)
+    holder = session.ProfileLock(settings.profile_dir)
+    holder.acquire()
+    try:
+        assert login.login(settings) == ExitCode.ERROR
+    finally:
+        holder.release()
+    assert browsers == []
 
 
 def test_remote_login_posts_link_then_result(monkeypatch: pytest.MonkeyPatch, settings: Settings):

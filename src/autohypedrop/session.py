@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+from typing import IO
+
 from playwright.sync_api import BrowserContext, Page, Playwright
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -19,24 +23,90 @@ class ProfileInUseError(RuntimeError):
     pass
 
 
+if sys.platform == "win32":
+    # No app-level lock on Windows; Chromium's own lock still covers headed runs.
+    def _try_lock(handle: IO[bytes]) -> bool:
+        return True
+
+    def _unlock(handle: IO[bytes]) -> None:
+        pass
+
+else:
+    import fcntl
+
+    def _try_lock(handle: IO[bytes]) -> bool:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
+
+    def _unlock(handle: IO[bytes]) -> None:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+class ProfileLock:
+    """Exclusive lock on the browser profile, held while any browser has it open.
+
+    Chromium's own profile lock is not enough: chrome-headless-shell, which
+    Playwright uses for headless runs, skips it, and two browsers writing one
+    profile can corrupt the session. The OS drops this lock if the process
+    dies, and it holds across containers that share the data volume.
+    """
+
+    FILE_NAME = "autohypedrop.lock"
+
+    def __init__(self, profile_dir: Path) -> None:
+        self._profile_dir = profile_dir
+        self._handle: IO[bytes] | None = None
+
+    def acquire(self) -> None:
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
+        handle = (self._profile_dir / self.FILE_NAME).open("ab")
+        if not _try_lock(handle):
+            handle.close()
+            raise ProfileInUseError(
+                f"the browser profile at {self._profile_dir} is in use by another "
+                "AutoHypedrop command (a login screen or another run); wait for it to "
+                "finish and try again"
+            )
+        self._handle = handle
+
+    def release(self) -> None:
+        if self._handle is not None:
+            _unlock(self._handle)
+            self._handle.close()
+            self._handle = None
+
+
 def launch_profile(
     playwright: Playwright, settings: Settings, *, headless: bool | None = None
 ) -> BrowserContext:
-    """Open the persistent Chromium profile that holds the operator's session."""
-    settings.profile_dir.mkdir(parents=True, exist_ok=True)
+    """Open the persistent Chromium profile that holds the operator's session.
+
+    The profile stays locked until the returned context closes.
+    """
+    lock = ProfileLock(settings.profile_dir)
+    lock.acquire()
     try:
-        return playwright.chromium.launch_persistent_context(
+        context = playwright.chromium.launch_persistent_context(
             user_data_dir=settings.profile_dir,
             headless=settings.headless if headless is None else headless,
             executable_path=settings.chromium_executable,
         )
     except PlaywrightError as exc:
+        lock.release()
         if "ProcessSingleton" in str(exc) or "profile appears to be in use" in str(exc):
             raise ProfileInUseError(
                 f"the browser profile at {settings.profile_dir} is open in another browser; "
                 "close it and try again"
             ) from exc
         raise
+    except BaseException:
+        lock.release()
+        raise
+    context.on("close", lambda _context: lock.release())
+    return context
 
 
 def visible(page: Page, target: site.Target) -> bool:
