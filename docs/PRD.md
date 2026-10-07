@@ -265,7 +265,7 @@ Priority uses MoSCoW: **M** must, **S** should, **C** could, **W** won't (this v
                └──────────────┬────────────────────┘
                               ▼
                      ┌──────────────────┐        ┌───────────────┐
-                     │ selectors.py     │        │ history.py    │
+                     │site_selectors.py │        │ history.py    │
                      │ single source of │        │ sqlite/jsonl  │
                      │ truth for DOM    │        └───────────────┘
                      └──────────────────┘
@@ -285,12 +285,16 @@ opt-in flag that Phase 0 either validates or rules out.
 **Selector strategy:** prefer role- and text-based locators
 (`get_by_role("button", name=re.compile("open", re.I))`) over CSS class
 names, which change with each frontend deploy. Every locator is named
-in `selectors.py` with a comment describing what it matches and when it
-was last verified.
+in `site_selectors.py` (not `selectors.py`, which would shadow the
+standard library module) with a description of what it matches and a
+`verified` date recording when it was last checked against the live site.
 
 **Allowlist enforcement (FR-9):** the click helper accepts only locators
 registered in the allowlist; any other call is a programming error that
-raises before the browser is touched.
+raises before the browser is touched. A real (non-dry) `run` also refuses
+to start while any allowlisted locator, or a container that scopes one,
+has no `verified` date, so guessed selectors can never click on the live
+site.
 
 ## 11. Configuration
 
