@@ -1,0 +1,42 @@
+# Phase 1 usage (one-shot runs; the scheduling daemon arrives in Phase 2):
+#
+#   docker compose up -d login      # sign in via noVNC; the link is posted to Discord
+#   docker compose run --rm autohypedrop run --dry-run
+#   docker compose run --rm autohypedrop run
+#
+# See README.md for scheduling the run from host cron.
+
+x-autohypedrop: &autohypedrop
+  image: ghcr.io/nosam1998/autohypedrop:latest
+  build: .
+  env_file: .env
+  environment:
+    PUID: ${PUID:-1000}
+    PGID: ${PGID:-1000}
+  volumes:
+    - ./data:/data
+  # Chromium needs more shared memory than Docker's 64 MB default.
+  shm_size: 1gb
+  init: true
+
+services:
+  autohypedrop:
+    <<: *autohypedrop
+    command: ["run"]
+    restart: "no"
+
+  login:
+    <<: *autohypedrop
+    command: ["login"]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      AHD_VNC: "true"
+    # Localhost only by default: anyone who can reach this port can drive the
+    # signed-in browser. To open the Discord link from your phone, set
+    # AHD_VNC_BIND to a private address (e.g. your Tailscale IP) and
+    # AHD_VNC_PASSWORD. See README.
+    ports:
+      - "${AHD_VNC_BIND:-127.0.0.1}:6080:6080"
+    restart: "no"
+    profiles: ["login"]
