@@ -28,9 +28,10 @@ against them, and the risk to your account is yours.
 cp .env.example .env          # add your Discord webhook; set PUID/PGID to `id -u`/`id -g`
 docker compose build
 
-# 1. One-time sign-in. Open http://localhost:6080/vnc.html, sign in with Google
-#    in the browser shown there, dismiss any popups, then close that browser window.
-docker compose run --rm --service-ports login
+# 1. One-time sign-in. A link to the login screen is posted to Discord (and to
+#    `docker compose logs login`). Open it, sign in with Google in the browser
+#    shown there, dismiss any popups, then close that browser window.
+docker compose up -d login
 
 # 2. See what would be opened, without clicking anything.
 docker compose run --rm autohypedrop run --dry-run
@@ -42,11 +43,36 @@ docker compose run --rm autohypedrop run
 The browser profile, which holds your session, lives in `./data/profile`.
 Treat it like a password.
 
-**Remote host (VPS, NAS):** the noVNC port only listens on localhost. Tunnel
-it with `ssh -L 6080:localhost:6080 you@host`, then open
-<http://localhost:6080/vnc.html> on your own machine. Or run `login` on your
-desktop and copy `data/profile` to the host. Setting `AHD_VNC_PASSWORD` adds a
-password to the VNC screen.
+### Logging in from your phone
+
+By default the login screen only listens on the machine running Docker, so
+the Discord link (`http://localhost:6080/...`) only works there. To tap the
+link from your phone or laptop instead:
+
+1. Put the host on a private network you can reach from those devices, such as
+   [Tailscale](https://tailscale.com) or your home LAN. **Do not expose port
+   6080 to the internet**: anyone who reaches it controls a browser signed in
+   to your account, and VNC passwords are at most 8 characters.
+2. In `.env`, set the address to listen on and a password:
+
+   ```sh
+   AHD_VNC_BIND=100.101.102.103          # the host's Tailscale or LAN IP
+   AHD_VNC_PASSWORD=choose8c
+   ```
+
+   The Discord link then points at that address. To post a different one
+   (say, a Tailscale MagicDNS name), set `AHD_LOGIN_URL` too.
+
+3. `docker compose up -d login`, then tap the link in Discord.
+
+The tool refuses to start a login screen that is reachable from other
+machines without `AHD_VNC_PASSWORD`. The password is never posted to Discord.
+The browser closes by itself after `AHD_LOGIN_TIMEOUT_MINUTES` (30 by
+default), and the result ("signed in" or "still signed out") is posted when it
+does.
+
+Alternatively, tunnel the port with `ssh -L 6080:localhost:6080 you@host`, or
+run `login` on your desktop and copy `data/profile` to the host.
 
 ## Quick start (local Python)
 
@@ -70,9 +96,21 @@ autohypedrop run --dry-run
 `run` exit codes: `0` claimed (or dry run found boxes), `1` error, `2` nothing
 to claim or kill switch engaged, `3` needs a human (session expired, challenge,
 unexpected page, safety stop). Every run ends with one JSON log line,
-`run_end`, carrying the outcome, the items won and the duration. Failures save a
-full-page screenshot to `data/screenshots/` and attach it to the Discord
-notification.
+`run_end`, carrying the outcome, the items won and the duration.
+
+## Discord warnings
+
+Set `AHD_NOTIFY_DISCORD_WEBHOOK` and the tool warns you whenever a run hits an
+obstacle: a CAPTCHA or bot check, a maintenance page, an account warning, an
+unexpected popup, a page that no longer looks as expected, a safety stop, an
+expired session, or an error. Each warning says what happened and what to do,
+and carries the page URL and a full-page screenshot (also saved to
+`data/screenshots/`). Obstacle warnings are always sent; `AHD_NOTIFY_ON` only
+picks which routine outcomes (`claimed`, `nothing`, `dry_run`) are reported too.
+
+Set `AHD_NOTIFY_DISCORD_MENTION` to your Discord user ID and warnings will
+@mention you, so they reach your phone even if the channel is muted. Routine
+messages never ping.
 
 **Kill switch:** set `AHD_KILL_SWITCH` to any value, or create `data/KILL`.
 Every command then exits immediately without starting a browser.

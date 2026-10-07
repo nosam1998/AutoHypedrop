@@ -7,7 +7,13 @@ import httpx
 import pytest
 
 from autohypedrop.config import NotifyOn, Settings
-from autohypedrop.notify import DiscordNotifier, build_notifiers, format_message, notify
+from autohypedrop.notify import (
+    OBSTACLES,
+    DiscordNotifier,
+    build_notifiers,
+    format_message,
+    notify,
+)
 from autohypedrop.outcome import ClaimedItem, FreeBox, Outcome, Reason, RunResult
 
 WEBHOOK = "https://discord.test/api/webhooks/123/secret-token"
@@ -18,15 +24,17 @@ class Recorder:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, Path | None]] = []
+        self.urgent: list[bool] = []
 
-    def send(self, message: str, screenshot: Path | None) -> None:
+    def send(self, message: str, screenshot: Path | None, *, urgent: bool = False) -> None:
         self.sent.append((message, screenshot))
+        self.urgent.append(urgent)
 
 
 class Exploding:
     name = "exploding"
 
-    def send(self, message: str, screenshot: Path | None) -> None:
+    def send(self, message: str, screenshot: Path | None, *, urgent: bool = False) -> None:
         request = httpx.Request("POST", WEBHOOK)
         raise httpx.HTTPStatusError(
             f"Server error for url {WEBHOOK}", request=request, response=httpx.Response(500)
@@ -50,18 +58,33 @@ def test_claimed_message_lists_items_and_next_reset() -> None:
     )
 
 
-def test_failure_message_includes_url_and_partial_progress() -> None:
+def test_captcha_warning_explains_and_includes_page_and_progress() -> None:
     result = RunResult(
         Outcome.NEEDS_HUMAN,
         reason=Reason.CHALLENGE,
-        detail="challenge page",
+        detail="challenge page (title 'Just a moment...')",
         url="https://hypedrop.com/free-drops",
         claimed=[ClaimedItem("Daily Box", None, None)],
     )
     message = format_message(result)
-    assert message.startswith("🛑 Needs a human (challenge): challenge page")
+    assert message.startswith("⚠️ CAPTCHA: hypedrop.com showed a CAPTCHA or bot check.")
+    assert "Details: challenge page (title 'Just a moment...')" in message
     assert "Opened before stopping: an unknown item from Daily Box" in message
-    assert "URL: <https://hypedrop.com/free-drops>" in message
+    assert "Page: <https://hypedrop.com/free-drops>" in message
+
+
+@pytest.mark.parametrize("reason", list(Reason))
+def test_every_obstacle_has_a_plain_explanation(reason: Reason) -> None:
+    assert reason in OBSTACLES
+    message = format_message(RunResult(Outcome.NEEDS_HUMAN, reason=reason))
+    assert message.startswith("⚠️ ")
+    assert OBSTACLES[reason] in message
+
+
+def test_session_expired_points_to_login_screen() -> None:
+    message = format_message(RunResult(Outcome.SESSION_EXPIRED))
+    assert "`docker compose up -d login`" in message
+    assert "link will be posted here" in message
 
 
 def test_dry_run_message_names_claimable_boxes() -> None:
@@ -88,7 +111,10 @@ def test_site_text_cannot_inject_markdown() -> None:
         (Outcome.SESSION_EXPIRED, {NotifyOn.FAILURE}, True),
         (Outcome.NEEDS_HUMAN, {NotifyOn.FAILURE}, True),
         (Outcome.ERROR, {NotifyOn.FAILURE}, True),
-        (Outcome.ERROR, {NotifyOn.CLAIMED}, False),
+        # Obstacles and errors are always reported, whatever AHD_NOTIFY_ON says.
+        (Outcome.ERROR, set(), True),
+        (Outcome.NEEDS_HUMAN, {NotifyOn.CLAIMED}, True),
+        (Outcome.SESSION_EXPIRED, set(), True),
         (Outcome.DRY_RUN, {NotifyOn.DRY_RUN}, True),
         (Outcome.KILL_SWITCH, set(NotifyOn), False),
     ],
@@ -97,6 +123,8 @@ def test_notify_on_filter(outcome: Outcome, notify_on: set[NotifyOn], sent: bool
     recorder = Recorder()
     notify(RunResult(outcome), settings(*notify_on), [recorder])
     assert bool(recorder.sent) is sent
+    if sent:
+        assert recorder.urgent == [outcome.is_failure]
 
 
 def test_notifier_failure_is_logged_without_leaking_webhook(
@@ -119,12 +147,13 @@ def test_build_notifiers(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(notifier, DiscordNotifier)
 
 
-def _discord(requests: list[httpx.Request]) -> DiscordNotifier:
+def _discord(requests: list[httpx.Request], mention: str | None = None) -> DiscordNotifier:
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(204)
 
-    return DiscordNotifier(WEBHOOK, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return DiscordNotifier(WEBHOOK, mention=mention, client=client)
 
 
 def test_discord_sends_json_without_mentions() -> None:
@@ -136,6 +165,19 @@ def test_discord_sends_json_without_mentions() -> None:
     body = json.loads(request.content)
     assert body["content"] == "@everyone hello"
     assert body["allowed_mentions"] == {"parse": []}
+
+
+def test_discord_mentions_operator_only_when_urgent() -> None:
+    requests: list[httpx.Request] = []
+    discord = _discord(requests, mention="123456789012345678")
+    discord.send("routine", None)
+    discord.send("captcha!", None, urgent=True)
+
+    routine, urgent = (json.loads(r.content) for r in requests)
+    assert routine["content"] == "routine"
+    assert routine["allowed_mentions"] == {"parse": []}
+    assert urgent["content"] == "<@123456789012345678> captcha!"
+    assert urgent["allowed_mentions"] == {"parse": [], "users": ["123456789012345678"]}
 
 
 def test_discord_attaches_screenshot(tmp_path: Path) -> None:

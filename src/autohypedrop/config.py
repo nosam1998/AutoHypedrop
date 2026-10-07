@@ -47,9 +47,20 @@ class Settings(BaseSettings):
     chromium_executable: Path | None = None
 
     notify_discord_webhook: SecretStr | None = None
+    # Discord user ID to @mention on obstacles, so the warning reaches your phone.
+    notify_discord_mention: str | None = Field(default=None, pattern=r"^\d{5,25}$")
+    # Failures (obstacles, expired session, errors) always notify; this only
+    # controls the other outcomes.
     notify_on: Annotated[frozenset[NotifyOn], NoDecode] = frozenset(
         {NotifyOn.FAILURE, NotifyOn.CLAIMED}
     )
+
+    # Remote login screen (noVNC). AHD_VNC is set by the compose `login` service.
+    vnc: bool = False
+    vnc_bind: str = "127.0.0.1"
+    vnc_password: SecretStr | None = None
+    login_url: str | None = None
+    login_timeout_minutes: int = Field(default=30, ge=1)
 
     max_clicks_per_run: int = Field(default=25, ge=1)
     max_page_loads_per_run: int = Field(default=10, ge=1)
@@ -71,6 +82,11 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return frozenset(part.strip().lower() for part in value.split(",") if part.strip())
         return value
+
+    @field_validator("notify_discord_mention", "login_url", "vnc_password", mode="before")
+    @classmethod
+    def _blank_is_none(cls, value: Any) -> Any:
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("log_level", mode="before")
     @classmethod

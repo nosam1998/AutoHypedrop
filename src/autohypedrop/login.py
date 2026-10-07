@@ -5,14 +5,21 @@ not use Playwright to show the page. It starts the same Chromium build as a
 plain browser on the profile directory and lets the operator sign in by
 hand. Only after that window is closed does Playwright open the profile, to
 check that the session works.
+
+Run in Docker with ``AHD_VNC=true`` (the compose ``login`` service), the
+window is shown on a noVNC web page instead of a local screen, and the link to
+that page is posted to Discord so the sign-in can be done from any device.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -20,7 +27,15 @@ from playwright.sync_api import sync_playwright
 from autohypedrop import site_selectors as site
 from autohypedrop.config import Settings
 from autohypedrop.log import get_logger
-from autohypedrop.outcome import ExitCode, Outcome, StopRun
+from autohypedrop.notify import (
+    LOGIN_COMMAND,
+    Notifier,
+    broadcast,
+    build_notifiers,
+    escape,
+    format_message,
+)
+from autohypedrop.outcome import ExitCode, Outcome, RunResult, StopRun
 from autohypedrop.safety import Budget, Pacer, SafeActions
 from autohypedrop.session import ProfileInUseError, ensure_logged_in, launch_profile
 
@@ -36,6 +51,51 @@ A browser window is opening on {url}.
 Nothing in this window is automated, and your Google password is never seen
 or stored by AutoHypedrop. The session is kept in {profile}.
 """
+
+LOGIN_URL = "http://{host}:6080/vnc.html?autoconnect=1&resize=scale"
+SCREEN_SIZE = "1280,900"  # matches the Xvfb screen in docker/entrypoint.sh
+
+LOGIN_READY = (
+    "🔑 Login screen is ready: <{link}>\n"
+    "Sign in to hypedrop.com with Google, dismiss any popups, then close the browser "
+    "window. The screen closes by itself after {minutes} minutes."
+)
+
+
+def login_link(settings: Settings) -> str | None:
+    """Where the operator opens the remote login screen, or None for a local window."""
+    if not settings.vnc:
+        return None
+    if settings.login_url:
+        return settings.login_url
+    host = settings.vnc_bind
+    if _is_loopback(host) or host in {"", "0.0.0.0", "::"}:
+        host = "localhost"
+    elif ":" in host:
+        host = f"[{host}]"  # IPv6 literal
+    return LOGIN_URL.format(host=host)
+
+
+def _is_loopback(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return host is not None and ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def exposure_problem(settings: Settings) -> str | None:
+    """Refuse to serve the login screen beyond this machine without a password."""
+    link = login_link(settings)
+    if link is None or settings.vnc_password is not None:
+        return None
+    if _is_loopback(settings.vnc_bind) and _is_loopback(urlsplit(link).hostname):
+        return None
+    return (
+        "The login screen would be reachable from other machines without a password. "
+        "Set AHD_VNC_PASSWORD, or keep AHD_VNC_BIND and AHD_LOGIN_URL on localhost."
+    )
 
 
 def has_display() -> bool:
@@ -62,6 +122,9 @@ def chromium_args(executable: Path, settings: Settings) -> list[str]:
     ]
     if getattr(os, "geteuid", lambda: -1)() == 0:
         args.append("--no-sandbox")  # Chromium refuses to start as root otherwise
+    if settings.vnc:
+        # No window manager on the virtual screen: fill it explicitly.
+        args += ["--window-position=0,0", f"--window-size={SCREEN_SIZE}"]
     args.append(settings.url(site.HOME_PATH))
     return args
 
@@ -84,34 +147,93 @@ def verify_session(settings: Settings) -> tuple[ExitCode, str | None]:
             context.close()
 
 
-def login(settings: Settings) -> int:
+def start_browser(args: list[str]) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(args)
+
+
+def _close(browser: subprocess.Popen[bytes]) -> None:
+    browser.terminate()  # lets Chromium flush cookies to the profile
+    try:
+        browser.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        browser.kill()
+        browser.wait()
+
+
+def _check(settings: Settings) -> tuple[ExitCode, str, str, bool]:
+    """Verify the session. Returns exit code, terminal text, chat text, urgency."""
+    try:
+        _, account = verify_session(settings)
+    except (ProfileInUseError, PlaywrightError) as exc:
+        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        return (
+            ExitCode.ERROR,
+            f"Could not check the session: {detail}",
+            f"❌ Could not check the login: {escape(detail)}",
+            True,
+        )
+    except StopRun as stop:
+        if stop.outcome is Outcome.SESSION_EXPIRED:
+            return (
+                ExitCode.NEEDS_HUMAN,
+                "Not signed in. Run `autohypedrop login` again.",
+                "⚠️ Login not finished: hypedrop.com still shows you signed out. "
+                f"Start the login screen again with `{LOGIN_COMMAND}`.",
+                True,
+            )
+        obstacle = RunResult(stop.outcome, reason=stop.reason, detail=stop.detail)
+        return (
+            ExitCode.NEEDS_HUMAN,
+            f"Could not confirm the session: {stop}",
+            "Login check stopped. " + format_message(obstacle),
+            True,
+        )
+    who = f" as {account}" if account else ""
+    return (
+        ExitCode.SUCCESS,
+        f"Signed in{who}. Session saved.",
+        f"✅ Signed in to hypedrop.com{escape(who)}. The next run will use this session.",
+        False,
+    )
+
+
+def login(settings: Settings, notifiers: Sequence[Notifier] | None = None) -> int:
     if not settings.headless and not has_display():
         print(
-            "No display found. In Docker, run `docker compose run --rm --service-ports login` "
-            "and open http://localhost:6080/vnc.html in your browser.",
+            f"No display found. In Docker, run `{LOGIN_COMMAND}`; the link to the login "
+            "screen is posted to Discord and printed in `docker compose logs login`.",
             file=sys.stderr,
         )
         return ExitCode.ERROR
+    if problem := exposure_problem(settings):
+        print(problem, file=sys.stderr)
+        return ExitCode.ERROR
+
+    link = login_link(settings)
+    # Chat only hears about remote logins; a local one is watched in this terminal.
+    chat: Sequence[Notifier] = []
+    if link:
+        chat = build_notifiers(settings) if notifiers is None else notifiers
 
     settings.profile_dir.mkdir(parents=True, exist_ok=True)
     executable = settings.chromium_executable or bundled_chromium()
     print(INSTRUCTIONS.format(url=settings.base_url, profile=settings.profile_dir), flush=True)
-    log.info("login_browser_open", profile=str(settings.profile_dir))
-    completed = subprocess.run(chromium_args(executable, settings), check=False)
-    log.info("login_browser_closed", returncode=completed.returncode)
+    browser = start_browser(chromium_args(executable, settings))
+    log.info("login_browser_open", profile=str(settings.profile_dir), link=link)
+    if link:
+        print(f"Login screen: {link}", flush=True)
+        broadcast(chat, LOGIN_READY.format(link=link, minutes=settings.login_timeout_minutes))
+
+    try:
+        browser.wait(timeout=settings.login_timeout_minutes * 60)
+    except subprocess.TimeoutExpired:
+        log.warning("login_timeout", minutes=settings.login_timeout_minutes)
+        print("Time is up; closing the browser.", flush=True)
+        _close(browser)
+    log.info("login_browser_closed", returncode=browser.returncode)
 
     print("Checking the session...", flush=True)
-    try:
-        code, account = verify_session(settings)
-    except (ProfileInUseError, PlaywrightError) as exc:
-        print(f"Could not check the session: {exc}", file=sys.stderr)
-        return ExitCode.ERROR
-    except StopRun as stop:
-        if stop.outcome is Outcome.SESSION_EXPIRED:
-            print("Not signed in. Run `autohypedrop login` again.", file=sys.stderr)
-        else:
-            print(f"Could not confirm the session: {stop}", file=sys.stderr)
-        return ExitCode.NEEDS_HUMAN
-
-    print(f"Signed in{f' as {account}' if account else ''}. Session saved.")
+    code, text, chat_text, urgent = _check(settings)
+    print(text, file=sys.stderr if code else sys.stdout, flush=True)
+    broadcast(chat, chat_text, urgent=urgent)
     return code

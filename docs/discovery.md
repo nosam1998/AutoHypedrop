@@ -15,11 +15,11 @@ the main verification tool.
    boxes under [Terms of service](#terms-of-service) below. Stop here if they rule
    the project out (PRD open question 6).
 2. **Sign in once:** `autohypedrop login` (or, in Docker,
-   `docker compose run --rm --service-ports login` and open
-   <http://localhost:6080/vnc.html>). Sign in with Google in that window, dismiss
-   any cookie banner, then close the window.
+   `docker compose up -d login` and open the link it posts to Discord). Sign in
+   with Google in that window, dismiss any cookie banner, then close the window.
 3. **Record a manual claim:** `autohypedrop record` (Docker:
-   `docker compose run --rm --service-ports login record`). Work through the
+   `docker compose run --rm --service-ports login record`, then open
+   <http://localhost:6080/vnc.html>). Work through the
    [checklist](#checklist), pressing Enter in the terminal on each page worth
    keeping, and `q` when done. Snapshots land in `data/discovery/<timestamp>/` and
    the trace in `data/traces/`. Open the trace with

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import BrowserContext, Playwright, sync_playwright
+from pydantic import SecretStr
 
 from autohypedrop import cycle, login, session
 from autohypedrop import site_selectors as site
@@ -93,7 +94,7 @@ def test_failure_notification_carries_screenshot(
 
     assert result.outcome is Outcome.SESSION_EXPIRED
     [(message, screenshot)] = recorder.sent
-    assert "autohypedrop login" in message
+    assert "docker compose up -d login" in message
     assert screenshot is not None and screenshot.is_file()
     assert screenshot.parent == settings.screenshots_dir
 
@@ -136,30 +137,160 @@ def test_verify_session_logged_out(monkeypatch: pytest.MonkeyPatch, settings: Se
     assert stop.value.outcome is Outcome.SESSION_EXPIRED
 
 
+class FakeBrowser:
+    """Stands in for the plain Chromium process started by ``login``."""
+
+    launched: list[list[str]]
+
+    def __init__(self, args: list[str], *, closes_by_itself: bool = True) -> None:
+        self.args = args
+        self.closes_by_itself = closes_by_itself
+        self.terminated = False
+        self.returncode: int | None = None
+
+    def wait(self, timeout: float | None = None) -> int:
+        if not self.closes_by_itself and not self.terminated:
+            raise subprocess.TimeoutExpired(self.args, timeout or 0)
+        self.returncode = 0
+        return 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.terminated = True
+
+
+def fake_popen(
+    monkeypatch: pytest.MonkeyPatch, *, closes_by_itself: bool = True
+) -> list[FakeBrowser]:
+    browsers: list[FakeBrowser] = []
+
+    def popen(args: list[str]) -> FakeBrowser:
+        browsers.append(FakeBrowser(args, closes_by_itself=closes_by_itself))
+        return browsers[-1]
+
+    monkeypatch.setattr(login, "start_browser", popen)
+    return browsers
+
+
 def test_login_opens_plain_browser_then_verifies(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ):
-    launched: list[list[str]] = []
-
-    def fake_run(args: list[str], check: bool) -> subprocess.CompletedProcess[bytes]:
-        launched.append(args)
-        return subprocess.CompletedProcess(args, 0)
-
-    monkeypatch.setattr(login.subprocess, "run", fake_run)
+    browsers = fake_popen(monkeypatch)
     monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+    recorder = Recorder()
 
-    assert login.login(settings) == ExitCode.SUCCESS
-    [args] = launched
-    assert f"--user-data-dir={settings.profile_dir.resolve()}" in args
-    assert "--password-store=basic" in args
-    assert args[-1] == "http://hypedrop.test/"
-    assert not any("remote-debugging" in a or "enable-automation" in a for a in args)
+    assert login.login(settings, notifiers=[recorder]) == ExitCode.SUCCESS
+    [browser] = browsers
+    assert f"--user-data-dir={settings.profile_dir.resolve()}" in browser.args
+    assert "--password-store=basic" in browser.args
+    assert browser.args[-1] == "http://hypedrop.test/"
+    assert not any("remote-debugging" in a or "enable-automation" in a for a in browser.args)
+    # A local login is watched in the terminal, so nothing goes to Discord.
+    assert recorder.sent == []
+
+
+def test_remote_login_posts_link_then_result(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    remote = settings.model_copy(update={"vnc": True})
+    browsers = fake_popen(monkeypatch)
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+    recorder = Recorder()
+
+    assert login.login(remote, notifiers=[recorder]) == ExitCode.SUCCESS
+    (ready, _), (done, _) = recorder.sent
+    assert ready.startswith(
+        "🔑 Login screen is ready: <http://localhost:6080/vnc.html?autoconnect=1&resize=scale>"
+    )
+    assert "closes by itself after 30 minutes" in ready
+    assert done == "✅ Signed in to hypedrop.com as operator. The next run will use this session."
+    assert recorder.urgent == [False, False]
+    assert "--window-size=1280,900" in browsers[0].args
+
+
+def test_remote_login_uses_configured_link(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    remote = settings.model_copy(
+        update={
+            "vnc": True,
+            "vnc_bind": "100.101.102.103",
+            "vnc_password": SecretStr("hunter2"),
+            "login_url": "http://100.101.102.103:6080/vnc.html",
+        }
+    )
+    fake_popen(monkeypatch)
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+    recorder = Recorder()
+
+    login.login(remote, notifiers=[recorder])
+    assert "<http://100.101.102.103:6080/vnc.html>" in recorder.sent[0][0]
+    assert "hunter2" not in recorder.sent[0][0]
+
+
+@pytest.mark.parametrize(
+    ("bind", "link"),
+    [
+        ("127.0.0.1", "http://localhost:6080/vnc.html?autoconnect=1&resize=scale"),
+        ("0.0.0.0", "http://localhost:6080/vnc.html?autoconnect=1&resize=scale"),
+        ("100.101.102.103", "http://100.101.102.103:6080/vnc.html?autoconnect=1&resize=scale"),
+        ("fd7a:115c::1", "http://[fd7a:115c::1]:6080/vnc.html?autoconnect=1&resize=scale"),
+    ],
+)
+def test_login_link_follows_bind_address(settings: Settings, bind: str, link: str):
+    remote = settings.model_copy(update={"vnc": True, "vnc_bind": bind})
+    assert login.login_link(remote) == link
+    assert login.login_link(settings) is None  # local window: no link
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"vnc_bind": "0.0.0.0"},
+        {"vnc_bind": "192.168.1.20"},
+        {"login_url": "http://nas.local:6080/vnc.html"},
+    ],
+)
+def test_remote_login_screen_needs_password_off_localhost(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, update: dict[str, str]
+):
+    exposed = settings.model_copy(update={"vnc": True, **update})
+    browsers = fake_popen(monkeypatch)
+    recorder = Recorder()
+
+    assert login.login(exposed, notifiers=[recorder]) == ExitCode.ERROR
+    assert browsers == []
+    assert recorder.sent == []
+
+
+def test_remote_login_times_out_then_checks_anyway(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    remote = settings.model_copy(update={"vnc": True})
+    browsers = fake_popen(monkeypatch, closes_by_itself=False)
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(logged_in=False)))
+    recorder = Recorder()
+
+    assert login.login(remote, notifiers=[recorder]) == ExitCode.NEEDS_HUMAN
+    assert browsers[0].terminated
+    done, _ = recorder.sent[-1]
+    assert done.startswith("⚠️ Login not finished: hypedrop.com still shows you signed out.")
+    assert recorder.urgent[-1] is True
+
+
+def test_remote_login_warns_on_captcha(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    remote = settings.model_copy(update={"vnc": True})
+    fake_popen(monkeypatch)
+    blocked = FakeSite(boxes=[Box("Daily Box")], title="Just a moment...")
+    monkeypatch.setattr(login, "launch_profile", routed(blocked))
+    recorder = Recorder()
+
+    assert login.login(remote, notifiers=[recorder]) == ExitCode.NEEDS_HUMAN
+    done, _ = recorder.sent[-1]
+    assert done.startswith("Login check stopped. ⚠️ CAPTCHA:")
+    assert recorder.urgent[-1] is True
 
 
 def test_login_reports_still_logged_out(monkeypatch: pytest.MonkeyPatch, settings: Settings):
-    monkeypatch.setattr(
-        login.subprocess, "run", lambda args, check: subprocess.CompletedProcess(args, 0)
-    )
+    fake_popen(monkeypatch)
     monkeypatch.setattr(login, "launch_profile", routed(FakeSite(logged_in=False)))
 
     assert login.login(settings) == ExitCode.NEEDS_HUMAN
@@ -172,4 +303,4 @@ def test_login_without_display_explains_docker(
     monkeypatch.setattr(login, "has_display", lambda: False)
 
     assert login.login(headed) == ExitCode.ERROR
-    assert "--service-ports login" in capsys.readouterr().err
+    assert "docker compose up -d login" in capsys.readouterr().err

@@ -37,7 +37,7 @@ if [[ "${AHD_VNC:-false}" == "true" ]]; then
   x11vnc -display "$DISPLAY" -rfbport 5900 -localhost -forever -shared -quiet "${vnc_auth[@]}" \
     >/dev/null 2>&1 &
   websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1 &
-  echo "Open http://localhost:6080/vnc.html in your browser to see the login window."
+  echo "Login screen is being served on port 6080 (noVNC)."
 elif [[ -z "${DISPLAY:-}" && "${AHD_HEADLESS:-false}" != "true" ]]; then
   start_display
 fi

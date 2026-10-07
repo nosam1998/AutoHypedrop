@@ -90,3 +90,20 @@ def test_kill_file_in_data_dir(tmp_path: Path) -> None:
 def test_kill_switch_works_with_broken_config(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("AHD_MAX_CLICKS_PER_RUN=not-a-number\nAHD_KILL_SWITCH=1\n")
     assert kill_switch_reason({}) is not None
+
+
+def test_discord_mention_must_be_a_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AHD_NOTIFY_DISCORD_MENTION", "123456789012345678")
+    assert Settings(_env_file=None).notify_discord_mention == "123456789012345678"
+    monkeypatch.setenv("AHD_NOTIFY_DISCORD_MENTION", "@everyone")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_blank_optional_values_are_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ("AHD_NOTIFY_DISCORD_MENTION", "AHD_LOGIN_URL", "AHD_VNC_PASSWORD"):
+        monkeypatch.setenv(key, "")
+    settings = Settings(_env_file=None)
+    assert settings.notify_discord_mention is None
+    assert settings.login_url is None
+    assert settings.vnc_password is None

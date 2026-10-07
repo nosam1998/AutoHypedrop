@@ -1,6 +1,6 @@
 # Phase 1 usage (one-shot runs; the scheduling daemon arrives in Phase 2):
 #
-#   docker compose run --rm --service-ports login     # one-time Google sign-in via noVNC
+#   docker compose up -d login      # sign in via noVNC; the link is posted to Discord
 #   docker compose run --rm autohypedrop run --dry-run
 #   docker compose run --rm autohypedrop run
 #
@@ -32,8 +32,11 @@ services:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       AHD_VNC: "true"
-    # Bound to localhost only: anyone who can reach this port can drive the
-    # signed-in browser. On a remote host, use an SSH tunnel (see README).
+    # Localhost only by default: anyone who can reach this port can drive the
+    # signed-in browser. To open the Discord link from your phone, set
+    # AHD_VNC_BIND to a private address (e.g. your Tailscale IP) and
+    # AHD_VNC_PASSWORD. See README.
     ports:
-      - "127.0.0.1:6080:6080"
+      - "${AHD_VNC_BIND:-127.0.0.1}:6080:6080"
+    restart: "no"
     profiles: ["login"]
