@@ -11,9 +11,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Xvfb gives headed Chromium a screen; x11vnc + noVNC let you reach that screen
 # from your own browser for the one-time `login` step.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify \
+    && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
+# A virtualenv keeps our dependencies apart from the Python packages apt
+# installed for websockify, which pip cannot upgrade or remove.
+RUN python3 -m venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
