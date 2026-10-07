@@ -1,0 +1,16 @@
+# Never bake the session or secrets into the image.
+data/
+.env
+
+.git/
+.github/
+.venv/
+docs/
+tests/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autohypedrop"
+version = "0.1.0"
+description = "Self-hosted automation that opens the free drops on your own hypedrop.com account."
+readme = "README.md"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+# Keep the Playwright pin in one place: the Dockerfile installs the matching
+# Chromium build from whatever version is pinned here.
+dependencies = ["playwright==1.63.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+autohypedrop = "autohypedrop.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autohypedrop"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

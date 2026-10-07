@@ -1,0 +1,43 @@
+# `make up` starts the scheduler; `make login` does the one-time Google sign-in.
+# See docs/DEPLOYMENT.md.
+
+x-autohypedrop: &autohypedrop
+  image: ${AHD_IMAGE:-ghcr.io/nosam1998/autohypedrop}:${AHD_IMAGE_TAG:-latest}
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    # Always keep state on the mounted volume, whatever .env says.
+    AHD_PROFILE_DIR: /data/profile
+    AHD_DATA_DIR: /data
+  # Chromium locks its profile by hostname. A fixed one lets it recover the
+  # lock after an unclean stop instead of refusing to start ("profile in use
+  # on another computer").
+  hostname: autohypedrop
+  # Match the owner of ./data on the host (`make setup` fills these in).
+  user: "${AHD_UID:-1000}:${AHD_GID:-1000}"
+  volumes:
+    - ./data:/data
+  # Chromium crashes with Docker's default 64 MB /dev/shm.
+  shm_size: 1gb
+
+services:
+  autohypedrop:
+    <<: *autohypedrop
+    command: ["daemon"]
+    restart: unless-stopped
+
+  # One-shot: `docker compose run --rm --service-ports login`, then open
+  # http://localhost:6080/vnc.html. Bound to localhost only; on a remote host,
+  # reach it through an SSH tunnel.
+  login:
+    <<: *autohypedrop
+    profiles: ["login"]
+    command: ["login"]
+    environment:
+      AHD_PROFILE_DIR: /data/profile
+      AHD_DATA_DIR: /data
+      AHD_VNC: "true"
+    ports:
+      - "127.0.0.1:${AHD_VNC_PORT:-6080}:6080"

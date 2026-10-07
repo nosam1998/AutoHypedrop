@@ -1,0 +1,13 @@
+# Runtime state: browser profile (holds your session cookies), history, screenshots
+data/
+.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
