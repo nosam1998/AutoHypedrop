@@ -208,6 +208,22 @@ def test_login_opens_plain_browser_then_verifies(
     assert recorder.sent == []
 
 
+def test_login_browser_skips_sandbox_only_where_chromium_cannot_use_it(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    monkeypatch.setattr(login.os, "geteuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(login, "in_container", lambda: False)
+    assert "--no-sandbox" not in login.chromium_args(Path("chrome"), settings)
+
+    # Docker's default seccomp profile leaves a non-root Chromium no usable sandbox.
+    monkeypatch.setattr(login, "in_container", lambda: True)
+    assert "--no-sandbox" in login.chromium_args(Path("chrome"), settings)
+
+    monkeypatch.setattr(login, "in_container", lambda: False)
+    monkeypatch.setattr(login.os, "geteuid", lambda: 0, raising=False)
+    assert "--no-sandbox" in login.chromium_args(Path("chrome"), settings)
+
+
 def test_login_holds_profile_lock_while_browser_is_open(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ):
