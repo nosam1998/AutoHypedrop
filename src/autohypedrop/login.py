@@ -114,6 +114,10 @@ def bundled_chromium() -> Path:
         return Path(playwright.chromium.executable_path)
 
 
+def in_container() -> bool:
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
 def chromium_args(executable: Path, settings: Settings) -> list[str]:
     args = [
         str(executable),
@@ -125,8 +129,11 @@ def chromium_args(executable: Path, settings: Settings) -> list[str]:
         "--no-first-run",
         "--no-default-browser-check",
     ]
-    if getattr(os, "geteuid", lambda: -1)() == 0:
-        args.append("--no-sandbox")  # Chromium refuses to start as root otherwise
+    if getattr(os, "geteuid", lambda: -1)() == 0 or in_container():
+        # Chromium refuses to start as root with its sandbox, and in a container
+        # the sandbox needs user namespaces that Docker's seccomp profile blocks
+        # ("No usable sandbox!"). Playwright's own launches skip it the same way.
+        args.append("--no-sandbox")
     if settings.vnc:
         # No window manager on the virtual screen: fill it explicitly.
         args += ["--window-position=0,0", f"--window-size={SCREEN_SIZE}"]
