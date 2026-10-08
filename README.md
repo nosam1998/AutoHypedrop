@@ -24,6 +24,10 @@ against them, and the risk to your account is yours.
 
 ## Quick start (Docker)
 
+With `make`, the steps below are `make setup build login dry-run`; `make help`
+lists the rest. [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers Raspberry Pi
+and VPS setups, moving a session between machines, and troubleshooting.
+
 ```sh
 cp .env.example .env          # add your Discord webhook; set PUID/PGID to `id -u`/`id -g`
 docker compose build
