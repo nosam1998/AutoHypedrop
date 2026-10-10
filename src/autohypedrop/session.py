@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import socket
 import sys
 from pathlib import Path
 from typing import IO
@@ -20,6 +23,10 @@ log = get_logger(__name__)
 
 
 class ProfileInUseError(RuntimeError):
+    pass
+
+
+class NoScreenError(RuntimeError):
     pass
 
 
@@ -52,6 +59,9 @@ class ProfileLock:
     Playwright uses for headless runs, skips it, and two browsers writing one
     profile can corrupt the session. The OS drops this lock if the process
     dies, and it holds across containers that share the data volume.
+
+    Taking it also clears a Chromium lock left behind by another container
+    (see :func:`clear_foreign_chromium_lock`).
     """
 
     FILE_NAME = "autohypedrop.lock"
@@ -71,12 +81,53 @@ class ProfileLock:
                 "finish and try again"
             )
         self._handle = handle
+        clear_foreign_chromium_lock(self._profile_dir)
 
     def release(self) -> None:
         if self._handle is not None:
             _unlock(self._handle)
             self._handle.close()
             self._handle = None
+
+
+# Chromium's messages, in the browser log Playwright attaches to the error, when
+# another browser holds the profile (on this host, or on another one).
+_PROFILE_IN_USE = (
+    "ProcessSingleton",
+    "Opening in existing browser session",
+    "profile appears to be in use",
+)
+
+# Chromium's own profile lock: SingletonLock is a symlink to "<hostname>-<pid>";
+# the socket and cookie let a second launch hand its window to the running browser.
+CHROMIUM_LOCK_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
+
+
+def clear_foreign_chromium_lock(profile_dir: Path) -> str | None:
+    """Remove a Chromium profile lock left by another host. Returns that host's name.
+
+    Only call this while holding :class:`ProfileLock`. Every Docker container is
+    a separate host to Chromium, so a container stopped or killed while its
+    browser had the profile open leaves a lock that later containers read as
+    "in use on another computer", and their Chromium exits at once. Holding
+    ProfileLock means no AutoHypedrop browser has the profile, and in Docker a
+    browser cannot outlive the command that started it, so such a lock is stale.
+    A lock from this host is left alone: Chromium checks that one itself, by
+    whether its process is still running.
+    """
+    try:
+        target = os.readlink(profile_dir / "SingletonLock")
+    except OSError:
+        return None  # no lock, or not Chromium's symlink
+    host, _, pid = target.rpartition("-")
+    if not host or not pid.isdigit() or host == socket.gethostname():
+        return None
+    for name in CHROMIUM_LOCK_FILES:
+        # If this fails, Chromium's "in use" error says what to do.
+        with contextlib.suppress(OSError):
+            (profile_dir / name).unlink()
+    log.warning("stale_browser_lock_removed", host=host, pid=int(pid))
+    return host
 
 
 def launch_profile(
@@ -96,10 +147,18 @@ def launch_profile(
         )
     except PlaywrightError as exc:
         lock.release()
-        if "ProcessSingleton" in str(exc) or "profile appears to be in use" in str(exc):
+        message = str(exc)
+        if any(marker in message for marker in _PROFILE_IN_USE):
             raise ProfileInUseError(
                 f"the browser profile at {settings.profile_dir} is open in another browser; "
                 "close it and try again"
+            ) from exc
+        if "Missing X server" in message:
+            # Playwright's explanation is in a box below the first line, which
+            # is all a notification shows.
+            raise NoScreenError(
+                "Chromium could not open its window: no X server is running on "
+                f"DISPLAY={os.environ.get('DISPLAY', '')!r}"
             ) from exc
         raise
     except BaseException:

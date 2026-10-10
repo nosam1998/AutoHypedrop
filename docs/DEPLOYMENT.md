@@ -189,9 +189,17 @@ finish, or check `docker compose ps` and stop it with `make down`.
 
 **"the browser profile ... is open in another browser"**
 Another Chromium has `data/profile` open, for example a desktop browser
-from `make local-login`. Close it. If none is open, run `make down`,
-delete `data/profile/Singleton*` (a lock a crashed browser can leave
-behind), and try again.
+from `make local-login`. Close it. A lock left by a container that was
+stopped or killed is cleared automatically on the next start. If no
+browser is open and the message persists, run `make down`, delete
+`data/profile/Singleton*`, and try again.
+
+**"Target page, context or browser has been closed"**
+Chromium quit while starting. `docker compose logs login` (or the
+`browser_failed` line of a run) shows its own explanation under
+"Browser logs". If it mentions a missing X server, update to the
+current image, which restarts the virtual screen cleanly when the login
+container is started again.
 
 **The login page at localhost:6080 doesn't load**
 Check that the login screen is running with `docker compose ps` and read
@@ -203,6 +211,9 @@ first.
 **"Not signed in" after closing the browser**
 The browser was closed before hypedrop.com showed you as signed in. Run
 `make login` again and wait for the signed-in page before closing it.
+Close the browser yourself rather than stopping the container; if you do
+stop it (`make down`, or `make login` again), the browser is still closed
+cleanly so the session is saved.
 
 **Google says "This browser or app may not be secure"**
 Make sure you're signing in through `make login`, which opens a normal

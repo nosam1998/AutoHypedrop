@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import signal
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
@@ -38,6 +41,7 @@ from autohypedrop.notify import (
 from autohypedrop.outcome import ExitCode, Outcome, RunResult, StopRun
 from autohypedrop.safety import Budget, Pacer, SafeActions
 from autohypedrop.session import (
+    NoScreenError,
     ProfileInUseError,
     ProfileLock,
     ensure_logged_in,
@@ -164,7 +168,12 @@ def start_browser(args: list[str]) -> subprocess.Popen[bytes]:
 
 
 def _close(browser: subprocess.Popen[bytes]) -> None:
-    browser.terminate()  # lets Chromium flush cookies to the profile
+    # SIGINT, not SIGTERM: on SIGTERM Chromium exits without saving cookies set
+    # in the last 30 seconds (a sign-in just finished) or removing its profile lock.
+    if sys.platform == "win32":
+        browser.terminate()
+    else:
+        browser.send_signal(signal.SIGINT)
     try:
         browser.wait(timeout=15)
     except subprocess.TimeoutExpired:
@@ -172,11 +181,30 @@ def _close(browser: subprocess.Popen[bytes]) -> None:
         browser.wait()
 
 
+def _exit_on_sigterm(signum: int, frame: FrameType | None) -> None:
+    raise SystemExit(128 + signum)
+
+
+@contextmanager
+def _sigterm_exits() -> Iterator[None]:
+    """Turn SIGTERM into SystemExit, so `docker compose stop` runs our cleanup.
+
+    Otherwise Python dies on the spot, and the container's end then kills the
+    browser before it has saved the session.
+    """
+    previous = signal.signal(signal.SIGTERM, _exit_on_sigterm)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def _check(settings: Settings) -> tuple[ExitCode, str, str, bool]:
     """Verify the session. Returns exit code, terminal text, chat text, urgency."""
     try:
         _, account = verify_session(settings)
-    except (ProfileInUseError, PlaywrightError) as exc:
+    except (ProfileInUseError, NoScreenError, PlaywrightError) as exc:
+        log.warning("session_check_failed", exc_info=True)
         detail = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
         return (
             ExitCode.ERROR,
@@ -238,18 +266,26 @@ def login(settings: Settings, notifiers: Sequence[Notifier] | None = None) -> in
         return ExitCode.ERROR
     try:
         print(INSTRUCTIONS.format(url=settings.base_url, profile=settings.profile_dir), flush=True)
-        browser = start_browser(chromium_args(executable, settings))
-        log.info("login_browser_open", profile=str(settings.profile_dir), link=link)
-        if link:
-            print(f"Login screen: {link}", flush=True)
-            broadcast(chat, LOGIN_READY.format(link=link, minutes=settings.login_timeout_minutes))
-
-        try:
-            browser.wait(timeout=settings.login_timeout_minutes * 60)
-        except subprocess.TimeoutExpired:
-            log.warning("login_timeout", minutes=settings.login_timeout_minutes)
-            print("Time is up; closing the browser.", flush=True)
-            _close(browser)
+        with _sigterm_exits():
+            browser = start_browser(chromium_args(executable, settings))
+            try:
+                log.info("login_browser_open", profile=str(settings.profile_dir), link=link)
+                if link:
+                    print(f"Login screen: {link}", flush=True)
+                    broadcast(
+                        chat, LOGIN_READY.format(link=link, minutes=settings.login_timeout_minutes)
+                    )
+                browser.wait(timeout=settings.login_timeout_minutes * 60)
+            except subprocess.TimeoutExpired:
+                log.warning("login_timeout", minutes=settings.login_timeout_minutes)
+                print("Time is up; closing the browser.", flush=True)
+                _close(browser)
+            except BaseException:
+                # Stopped from outside (`docker compose stop`, Ctrl+C): close the
+                # browser cleanly, so the sign-in is saved and the profile unlocked.
+                log.warning("login_interrupted")
+                _close(browser)
+                raise
         log.info("login_browser_closed", returncode=browser.returncode)
     finally:
         lock.release()

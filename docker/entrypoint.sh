@@ -19,12 +19,21 @@ fi
 
 start_display() {
   export DISPLAY=:99
-  Xvfb "$DISPLAY" -screen 0 1280x900x24 -nolisten tcp >/dev/null 2>&1 &
+  # A restarted container (`docker compose up -d login` a second time) keeps
+  # /tmp. Xvfb refuses to start while its old lock names a running pid, and the
+  # old socket would make it look as if it had started.
+  rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 || true
+  local xvfb_log
+  xvfb_log="$(mktemp)"
+  Xvfb "$DISPLAY" -screen 0 1280x900x24 -nolisten tcp >"$xvfb_log" 2>&1 &
+  local xvfb_pid=$!
   for _ in $(seq 50); do
+    kill -0 "$xvfb_pid" 2>/dev/null || break
     [[ -S /tmp/.X11-unix/X99 ]] && return 0
     sleep 0.1
   done
-  echo "Xvfb did not start" >&2
+  echo "Xvfb did not start:" >&2
+  cat "$xvfb_log" >&2
   exit 1
 }
 

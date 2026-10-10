@@ -18,6 +18,9 @@ x-autohypedrop: &autohypedrop
   # Chromium needs more shared memory than Docker's 64 MB default.
   shm_size: 1gb
   init: true
+  # On `docker compose stop` the browser is closed cleanly, which saves the
+  # session; give it longer than the default 10 seconds.
+  stop_grace_period: 30s
 
 services:
   autohypedrop:

@@ -6,8 +6,15 @@ starts its own Playwright, and the sync API cannot nest.
 
 from __future__ import annotations
 
+import os
+import signal
+import socket
+import sqlite3
 import subprocess
+import threading
+import time
 from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -137,6 +144,47 @@ def test_profile_lock_blocks_a_second_holder(settings: Settings):
     session.ProfileLock(settings.profile_dir).acquire()
 
 
+def plant_chromium_lock(profile_dir: Path, host: str) -> None:
+    """What Chromium leaves in the profile when it is killed with the profile open."""
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "SingletonLock").symlink_to(f"{host}-4242")
+    (profile_dir / "SingletonSocket").symlink_to("/tmp/.com.google.Chrome.gone/SingletonSocket")
+    (profile_dir / "SingletonCookie").symlink_to("1234567890")
+
+
+def test_browser_lock_left_by_another_container_is_cleared(settings: Settings):
+    # Every container is another host to Chromium, which would refuse the
+    # profile as "in use on another computer" and exit at once.
+    plant_chromium_lock(settings.profile_dir, "0123456789ab")
+
+    with sync_playwright() as playwright:
+        session.launch_profile(playwright, settings).close()
+
+    assert not (settings.profile_dir / "SingletonLock").is_symlink()
+
+
+def test_browser_lock_from_this_host_is_left_to_chromium(settings: Settings):
+    host = socket.gethostname()
+    plant_chromium_lock(settings.profile_dir, host)
+
+    lock = session.ProfileLock(settings.profile_dir)
+    lock.acquire()
+    lock.release()
+
+    assert os.readlink(settings.profile_dir / "SingletonLock") == f"{host}-4242"
+
+
+def test_missing_screen_is_explained(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    headed = settings.model_copy(update={"headless": False})
+
+    with sync_playwright() as playwright, pytest.raises(session.NoScreenError) as error:
+        session.launch_profile(playwright, headed)
+    assert "no X server" in str(error.value)
+    session.ProfileLock(settings.profile_dir).acquire()  # released after the failure
+
+
 def test_verify_session(monkeypatch: pytest.MonkeyPatch, settings: Settings):
     fake = FakeSite(boxes=[Box("Daily Box")])
     monkeypatch.setattr(login, "launch_profile", routed(fake))
@@ -163,6 +211,7 @@ class FakeBrowser:
         self.args = args
         self.closes_by_itself = closes_by_itself
         self.terminated = False
+        self.signals: list[int] = []
         self.returncode: int | None = None
 
     def wait(self, timeout: float | None = None) -> int:
@@ -170,6 +219,10 @@ class FakeBrowser:
             raise subprocess.TimeoutExpired(self.args, timeout or 0)
         self.returncode = 0
         return 0
+
+    def send_signal(self, sig: int) -> None:
+        self.signals.append(sig)
+        self.terminated = True
 
     def terminate(self) -> None:
         self.terminated = True
@@ -336,10 +389,79 @@ def test_remote_login_times_out_then_checks_anyway(
     recorder = Recorder()
 
     assert login.login(remote, notifiers=[recorder]) == ExitCode.NEEDS_HUMAN
-    assert browsers[0].terminated
+    assert browsers[0].signals == [signal.SIGINT]
     done, _ = recorder.sent[-1]
     assert done.startswith("⚠️ Login not finished: hypedrop.com still shows you signed out.")
     assert recorder.urgent[-1] is True
+
+
+def test_sigterm_closes_login_browser_cleanly(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    # `docker compose stop` sends SIGTERM. Python would die on the spot, and the
+    # container's end would kill the browser before it saved the sign-in.
+    class StoppedBrowser(FakeBrowser):
+        def wait(self, timeout: float | None = None) -> int:
+            if not self.signals:
+                os.kill(os.getpid(), signal.SIGTERM)
+            return super().wait(timeout)
+
+    browsers: list[StoppedBrowser] = []
+
+    def popen(args: list[str]) -> StoppedBrowser:
+        browsers.append(StoppedBrowser(args))
+        return browsers[-1]
+
+    monkeypatch.setattr(login, "start_browser", popen)
+    previous = signal.getsignal(signal.SIGTERM)
+
+    with pytest.raises(SystemExit) as stopped:
+        login.login(settings)
+
+    assert stopped.value.code == 128 + signal.SIGTERM
+    assert browsers[0].signals == [signal.SIGINT]
+    assert signal.getsignal(signal.SIGTERM) is previous
+    session.ProfileLock(settings.profile_dir).acquire()  # released
+
+
+def test_closing_login_browser_saves_session_and_unlocks_profile(settings: Settings):
+    """With real Chromium: SIGTERM would lose a cookie set seconds ago, and leave
+    the profile lock behind for the next container to trip over."""
+    cookie_set = threading.Event()
+
+    class SignIn(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Set-Cookie", "sid=signed-in; Max-Age=86400; Path=/")
+            self.end_headers()
+            self.wfile.write(b"<p>signed in</p>")
+            cookie_set.set()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SignIn)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    site = settings.model_copy(update={"base_url": f"http://127.0.0.1:{server.server_port}"})
+    args = login.chromium_args(settings.chromium_executable or login.bundled_chromium(), site)
+    # No screen in CI; and the sandbox is beside the point here.
+    args[1:1] = ["--headless", "--no-sandbox"]
+
+    browser = login.start_browser(args)
+    try:
+        assert cookie_set.wait(timeout=30)
+        time.sleep(1)  # let Chromium take the cookie in, well inside its 30 s write delay
+        login._close(browser)
+    finally:
+        if browser.poll() is None:
+            browser.kill()
+        server.shutdown()
+
+    cookies = sqlite3.connect(settings.profile_dir / "Default" / "Cookies")
+    try:
+        saved = cookies.execute("SELECT count(*) FROM cookies WHERE name = 'sid'").fetchone()
+    finally:
+        cookies.close()
+    assert saved == (1,)
+    assert sorted(settings.profile_dir.glob("Singleton*")) == []
 
 
 def test_remote_login_warns_on_captcha(monkeypatch: pytest.MonkeyPatch, settings: Settings):
