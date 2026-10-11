@@ -61,9 +61,13 @@ LOGIN_BUTTON = Target(
 LOGGED_IN_INDICATOR = Target(
     "logged_in_indicator",
     "Element present only when logged in (avatar or profile link).",
+    # The live account link includes the level badge in its accessible name,
+    # e.g. "67 ACCOUNT". Keep the match anchored so other account-related links
+    # do not count as proof of a signed-in session.
     lambda root: root.get_by_role(
-        "link", name=re.compile(r"^\s*(my )?(profile|account)\s*$", re.I)
+        "link", name=re.compile(r"^\s*(?:\d+\s+)?(?:my )?(?:profile|account)\s*$", re.I)
     ),
+    verified="2026-10-11",
 )
 
 ACCOUNT_NAME = Target(

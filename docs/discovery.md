@@ -1,6 +1,7 @@
 # Phase 0 — Discovery notes
 
-Status: **not started**. This page is the deliverable of the Phase 0 spike in the
+Status: **partially started** (session indicator checked on 2026-10-11). This
+page is the deliverable of the Phase 0 spike in the
 [PRD](PRD.md#phase-0--discovery-spike-1-to-2-evenings). Fill it in by hand against
 the live site; nothing here can be done from CI.
 
@@ -56,7 +57,7 @@ today, before anyone has looked at the real page.
 |---|---|---|---|
 | `FREE_DROPS_PATH` | `/free-drops` | | |
 | `login_button` | button named "Sign in" / "Log in" | | |
-| `logged_in_indicator` | link named "Profile" / "Account" | | |
+| `logged_in_indicator` | link named "Profile" / "Account" | Account link includes a numeric level badge before "ACCOUNT"; allow that prefix in its accessible name. Saved-session check verified without clicks. | 2026-10-11 |
 | `account_name` | `data-testid="username"` | | |
 | `free_drops_region` | region (labelled section) named "Free drops" | | |
 | `free_box_card` | `article` inside the region | | |
