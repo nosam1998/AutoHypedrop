@@ -32,7 +32,7 @@ build: setup ## Build the image locally
 pull: setup ## Pull the published image from GHCR instead of building
 	$(COMPOSE) pull autohypedrop
 
-login: setup ## One-time Google sign-in; prints the login link (also sent to Discord)
+login: setup ## Reuse the saved login; open Google sign-in when needed
 	$(COMPOSE) up -d --force-recreate login
 	@echo "Following the login screen's output. Ctrl+C stops following, not the login."
 	$(COMPOSE) logs -f login

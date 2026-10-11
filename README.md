@@ -47,6 +47,16 @@ docker compose run --rm autohypedrop run
 The browser profile, which holds your session, lives in `./data/profile`.
 Treat it like a password.
 
+`make login` checks an existing profile first. If the Google-linked Hypedrop
+session is still valid, it succeeds automatically without requiring you to
+sign in again or sending a login notification. Runs also reuse this saved
+session. When it expires, the login command opens the browser for you to finish
+Google sign-in and any 2FA.
+
+To open the browser explicitly, for example to switch accounts, use
+`autohypedrop login --force` (Docker:
+`docker compose run --rm --service-ports login login --force`).
+
 ### Logging in from your phone
 
 By default the login screen only listens on the machine running Docker, so
@@ -93,7 +103,7 @@ autohypedrop run --dry-run
 
 | Command | What it does |
 |---|---|
-| `autohypedrop login` | Opens a normal (not automated) Chromium window on the profile for you to sign in by hand, then checks that the session works. |
+| `autohypedrop login` | Automatically reuses a valid saved session; otherwise opens Chromium for Google sign-in and checks the result. Add `--force` to always open the sign-in window. |
 | `autohypedrop run` | One claim cycle. Add `--dry-run` to find claimable boxes without clicking. |
 | `autohypedrop record` | Phase 0 helper: saves a Playwright trace, plus page snapshots on demand, while you browse by hand. |
 
