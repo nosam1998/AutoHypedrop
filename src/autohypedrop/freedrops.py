@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page
@@ -48,9 +49,34 @@ def _cards(page: Page) -> Locator:
     return site.FREE_BOX_CARD(site.FREE_DROPS_REGION(page))
 
 
+def _site_link(page: Page, href: str | None) -> str:
+    """Resolve a rendered navigation link without leaving the current site."""
+    current = urlsplit(page.url)
+    target = urlsplit(urljoin(page.url, href or ""))
+    if (
+        not href
+        or target.scheme not in {"http", "https"}
+        or (target.scheme, target.netloc) != (current.scheme, current.netloc)
+        or target.username is not None
+    ):
+        raise needs_human(Reason.SELECTOR_MISSING, "expected a same-site Free Drop link")
+    return urlunsplit(target._replace(fragment=""))
+
+
 def open_free_drops(page: Page, actions: SafeActions, settings: Settings) -> None:
     """Load the Free Drops page and wait until its cards have rendered."""
-    actions.goto(settings.url(site.FREE_DROPS_PATH))
+    links = site.FREE_DROPS_LINK(page).filter(visible=True)
+    try:
+        links.first.wait_for(state="visible", timeout=settings.timeout_ms)
+    except PlaywrightTimeoutError:
+        check_stop_conditions(page)
+        raise needs_human(
+            Reason.SELECTOR_MISSING, "no Free Drop navigation link found on the page"
+        ) from None
+    destinations = {_site_link(page, link.get_attribute("href")) for link in links.all()}
+    if len(destinations) != 1:
+        raise needs_human(Reason.SELECTOR_MISSING, "Free Drop links point to different pages")
+    actions.goto(destinations.pop())
     region = site.FREE_DROPS_REGION(page)
     try:
         region.first.wait_for(state="visible", timeout=settings.timeout_ms)
@@ -91,6 +117,54 @@ def enumerate_boxes(page: Page) -> list[FreeBox]:
         total=len(boxes),
         claimable=[b.name for b in boxes if b.claimable],
         cooling_down={b.name: b.cooldown_seconds for b in boxes if b.cooldown_seconds},
+    )
+    return boxes
+
+
+def inspect_linked_boxes(page: Page, actions: SafeActions, settings: Settings) -> list[FreeBox]:
+    """Read availability on individual level-box pages. Never opens a box."""
+    if not actions.dry_run:
+        raise needs_human(
+            Reason.UNVERIFIED_SELECTORS,
+            "Individual box pages support dry-run discovery only. The opening and result "
+            "flow still needs verification from a recorded manual opening.",
+        )
+    boxes = []
+    destinations: list[tuple[FreeBox, str]] = []
+    for index, card in enumerate(_cards(page).all()):
+        link = site.FREE_BOX_LINK(card).filter(visible=True)
+        if link.count() != 1:
+            raise needs_human(Reason.SELECTOR_MISSING, "expected one level-box link per tile")
+        box = FreeBox(link.inner_text().strip(), index, False)
+        boxes.append(box)
+        # Do not visit locked or priced tiles, even if their markup contains links.
+        if site.FREE_BOX_LABEL(card).filter(visible=True).count() == 1:
+            destinations.append((box, _site_link(page, link.get_attribute("href"))))
+
+    for box, url in destinations:
+        actions.goto(url)
+        form = site.BOX_OPEN_FORM(page).filter(visible=True)
+        try:
+            form.first.wait_for(state="visible", timeout=settings.timeout_ms)
+        except PlaywrightTimeoutError:
+            check_stop_conditions(page)
+            raise needs_human(
+                Reason.SELECTOR_MISSING, f"no opening controls found for {box.name!r}"
+            ) from None
+        check_stop_conditions(page)
+        if form.count() != 1:
+            raise needs_human(Reason.SELECTOR_MISSING, "expected one box opening form")
+        cooldown_text = _text(site.CARD_COOLDOWN(form))
+        cooldown = parse_countdown(cooldown_text) if cooldown_text else None
+        button = site.LINKED_FREE_OPEN(form).filter(visible=True)
+        claimable = cooldown_text is None and button.count() == 1 and button.is_enabled()
+        boxes[box.index] = FreeBox(box.name, box.index, claimable, cooldown)
+
+    log.info(
+        "boxes_found",
+        total=len(boxes),
+        claimable=[box.name for box in boxes if box.claimable],
+        cooling_down={box.name: box.cooldown_seconds for box in boxes if box.cooldown_seconds},
     )
     return boxes
 
@@ -137,7 +211,10 @@ def claim_all(page: Page, actions: SafeActions, settings: Settings, result: RunR
     still reports what it opened.
     """
     open_free_drops(page, actions, settings)
-    result.boxes_seen = enumerate_boxes(page)
+    if page.locator("cw-free-boxes-grid").filter(visible=True).count():
+        result.boxes_seen = inspect_linked_boxes(page, actions, settings)
+    else:
+        result.boxes_seen = enumerate_boxes(page)
     if not result.boxes_seen:
         raise needs_human(Reason.SELECTOR_MISSING, "the Free Drops section has no box cards")
 

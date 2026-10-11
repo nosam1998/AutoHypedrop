@@ -1,6 +1,6 @@
 # Phase 0 — Discovery notes
 
-Status: **partially started** (session indicator checked on 2026-10-11). This
+Status: **partially started** (session and rewards discovery checked on 2026-10-11). This
 page is the deliverable of the Phase 0 spike in the
 [PRD](PRD.md#phase-0--discovery-spike-1-to-2-evenings). Fill it in by hand against
 the live site; nothing here can be done from CI.
@@ -38,7 +38,7 @@ the main verification tool.
 
 | # | Assumption | Finding | Date |
 |---|---|---|---|
-| A1 | Free Drops page URL and DOM structure of a claimable box | | |
+| A1 | Free Drops page URL and DOM structure of a claimable box | The Free Drop navigation link points to `/na/rewards` for this account. The grid links to separate `/boxes/view/na/level-*` pages. Dry-run discovery follows same-site links and checks each eligible page's explicit Open for Free control. | 2026-10-11 |
 | A2 | Reset behaviour: fixed time vs. rolling 24h | | |
 | A3 | Logged-in cookie jar survives 7+ days without re-auth | | |
 | A4 | Cloudflare or similar bot management in use | | |
@@ -55,13 +55,13 @@ today, before anyone has looked at the real page.
 
 | Target | Shipped guess | Real locator | Verified |
 |---|---|---|---|
-| `FREE_DROPS_PATH` | `/free-drops` | | |
+| `free_drops_link` | `/free-drops` | Read the visible Free Drop link's href; observed `/na/rewards`. Header and footer may duplicate the same URL. | 2026-10-11 |
 | `login_button` | button named "Sign in" / "Log in" | | |
 | `logged_in_indicator` | link named "Profile" / "Account" | Account link includes a numeric level badge before "ACCOUNT"; allow that prefix in its accessible name. Saved-session check verified without clicks. | 2026-10-11 |
 | `account_name` | `data-testid="username"` | | |
-| `free_drops_region` | region (labelled section) named "Free drops" | | |
-| `free_box_card` | `article` inside the region | | |
-| `card_name` | heading inside the card | | |
+| `free_drops_region` | region (labelled section) named "Free drops" | `cw-free-boxes-grid` (read-only discovery) | 2026-10-11 |
+| `free_box_card` | `article` inside the region | `cw-box-grid-item-ecommerce` inside that grid; inspect only tiles explicitly labelled FREE, excluding LOCKED and priced tiles | 2026-10-11 |
+| `card_name` | heading inside the card | Link named Level followed by a number | 2026-10-11 |
 | `card_cooldown` | text like `12h 30m` or `11:59:03` inside the card | | |
 | `open_free_box` | button named exactly "Open" / "Claim" / "Open free" inside the card | | |
 | `skip_animation` | button named "Skip" | | |
@@ -71,6 +71,17 @@ today, before anyone has looked at the real page.
 | `close_result` | button named "Close" / "OK" / "Done" / "Keep" inside the dialog | | |
 | `warning_banner` | `role=alert` mentioning suspension, restriction, etc. | | |
 | `maintenance_notice` | text "under maintenance" | | |
+
+The recordings so far show navigation and the controls before an opening, not a
+verified completed claim and result. The individual box-page flow therefore
+supports `run --dry-run` only. The explicit Open for Free control is read to
+determine availability; Free Try, disabled controls and priced buttons do not
+count. It is not on the click allowlist. Automatic claims remain blocked until
+the complete opening/result flow is implemented and verified.
+
+Recording saves evidence; it does not update the program's selectors by itself.
+At most one page load is used per eligible linked box, in addition to the home
+and rewards pages. The configured page-load budget still applies.
 
 ## Checklist
 
