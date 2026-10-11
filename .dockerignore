@@ -2,6 +2,7 @@
 .github
 .env
 data
+data.zip
 docs
 tests
 **/__pycache__
