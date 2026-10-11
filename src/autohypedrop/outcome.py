@@ -55,10 +55,10 @@ class Reason(StrEnum):
 
 @dataclass(frozen=True)
 class FreeBox:
-    """A free-drop card as seen on the Free Drops page."""
+    """A level box from the rewards grid, as last seen on its own page."""
 
     name: str
-    index: int  # position among the cards, used to find it again
+    index: int  # position among the grid's tiles
     claimable: bool
     cooldown_seconds: int | None = None
 
@@ -68,6 +68,8 @@ class ClaimedItem:
     box: str
     item: str | None
     value: str | None
+    # The page right after opening; shows the won item even when its name is not read.
+    screenshot: str | None = field(default=None, compare=False)
 
 
 @dataclass

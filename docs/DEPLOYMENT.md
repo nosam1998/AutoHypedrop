@@ -5,11 +5,12 @@ sign in to hypedrop.com with Google once, through a browser window the
 container shows you in a web page. After that, each run reuses that
 session to open your free drops.
 
-> **Current status:** Phase 1 code is in place, but the site selectors have
-> not been checked against the live site yet (Phase 0). Until they are,
-> `run` refuses to click anything; `dry-run` works and is how you verify
-> them (see [discovery.md](discovery.md)). There is no built-in scheduler
-> until Phase 2, so daily runs come from the host's cron.
+> **Current status:** `run` opens every box the rewards page marks FREE.
+> Which element shows the won item has not been verified yet, so each opening
+> is saved as a screenshot in `data/openings/` and attached to the Discord
+> message (see [discovery.md](discovery.md)). Watch the first real run. There
+> is no built-in scheduler until Phase 2, so daily runs come from the host's
+> cron.
 
 ## What you need
 
@@ -81,7 +82,7 @@ To sign in from your phone instead, see
 
 ```sh
 make dry-run   # lists the claimable free drops, opens nothing
-make run       # one real claim cycle (once the selectors are verified)
+make run       # one real claim cycle: opens the free boxes
 make cron      # prints the crontab line; add it with `crontab -e`
 ```
 

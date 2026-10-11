@@ -158,6 +158,10 @@ def format_message(result: RunResult) -> str:
             f"✅ Opened {count} free box{'es' if count != 1 else ''}{who}: "
             + "; ".join(_describe(c) for c in result.claimed)
         )
+        if result.screenshot and any(c.item is None for c in result.claimed):
+            lines.append(
+                "The screenshot shows the last box opened; there is one for each in data/openings/."
+            )
     elif result.outcome is Outcome.NOTHING_TO_CLAIM:
         lines.append(f"⏳ Nothing to claim right now{who}.")
     elif result.outcome is Outcome.DRY_RUN:

@@ -22,7 +22,7 @@ def test_strip_query_drops_tokens() -> None:
 
 
 def test_capture_snapshot(context: BrowserContext, tmp_path: Path) -> None:
-    FakeSite(boxes=[Box("Daily Box")]).install(context)
+    FakeSite(boxes=[Box("Level 2")]).install(context)
     page = context.new_page()
     page.goto(f"{BASE_URL}/free-drops?ref=abc")
 
@@ -30,7 +30,7 @@ def test_capture_snapshot(context: BrowserContext, tmp_path: Path) -> None:
     html = capture_snapshot(page, out, 3)
 
     assert html == out / "03-free-drops.html"
-    assert "Daily Box" in html.read_text()
+    assert "Level 2" in html.read_text()
     assert (out / "03-free-drops.png").stat().st_size > 0
     [entry] = [json.loads(line) for line in (out / "index.jsonl").read_text().splitlines()]
     assert entry["url"] == f"{BASE_URL}/free-drops"

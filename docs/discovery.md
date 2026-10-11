@@ -5,10 +5,11 @@ page is the deliverable of the Phase 0 spike in the
 [PRD](PRD.md#phase-0--discovery-spike-1-to-2-evenings). Fill it in by hand against
 the live site; nothing here can be done from CI.
 
-Until every click target in `src/autohypedrop/site_selectors.py` has a `verified`
-date, `autohypedrop run` refuses to click anything and exits 3 with
-`unverified_selectors`. `autohypedrop run --dry-run` works in the meantime and is
-the main verification tool.
+`autohypedrop run` refuses to click anything, and exits 3 with
+`unverified_selectors`, while the click target in
+`src/autohypedrop/site_selectors.py` or a locator that scopes it lacks a
+`verified` date. All of them are verified as of 2026-10-11, so `run` opens free
+boxes. `autohypedrop run --dry-run` remains the main verification tool.
 
 ## How to do the spike
 
@@ -42,8 +43,8 @@ the main verification tool.
 | A2 | Reset behaviour: fixed time vs. rolling 24h | Rewards has a shared `cw-daily-free-countdown` reading "Resets in" followed by hours/minutes/seconds, including when boxes are available. Discovery reports this timer. The exact reset policy still needs observation across a completed claim/reset. | 2026-10-11 |
 | A3 | Logged-in cookie jar survives 7+ days without re-auth | | |
 | A4 | Cloudflare or similar bot management in use | | |
-| A5 | Opening is a single click, or multi-step with animation/confirm | | |
-| A6 | Authenticated API the UI calls that could replace DOM clicks | | |
+| A5 | Opening is a single click, or multi-step with animation/confirm | Not yet recorded. `run` assumes one click on Open for Free and confirms by reloading the box page; a confirm step would leave the box claimable, which stops the run with `claim_not_committed`. The first automated openings are saved in `data/openings/`. | |
+| A6 | Authenticated API the UI calls that could replace DOM clicks | Reads are GraphQL GETs (`FreeBoxesGrid`, `BoxView`, `UserBoxList`). Each automated opening saves the site's non-GET responses to `data/openings/<time>-<box>.json`. | |
 
 Also answer: the account's level, and whether that level has a daily free box at
 all (PRD open question 2); whether headless Chromium is challenged (question 5).
@@ -59,30 +60,41 @@ today, before anyone has looked at the real page.
 | `login_button` | button named "Sign in" / "Log in" | | |
 | `logged_in_indicator` | link named "Profile" / "Account" | Account link includes a numeric level badge before "ACCOUNT"; allow that prefix in its accessible name. Saved-session check verified without clicks. | 2026-10-11 |
 | `account_name` | `data-testid="username"` | | |
-| `free_drops_region` | region (labelled section) named "Free drops" | `cw-free-boxes-grid` (read-only discovery) | 2026-10-11 |
+| `free_drops_region` | region (labelled section) named "Free drops" | `cw-free-boxes-grid` | 2026-10-11 |
 | `free_box_card` | `article` inside the region | `cw-box-grid-item-ecommerce` inside that grid; inspect only tiles explicitly labelled FREE, excluding LOCKED and priced tiles | 2026-10-11 |
-| `card_name` | heading inside the card | Link named Level followed by a number | 2026-10-11 |
-| `card_cooldown` | text like `12h 30m` or `11:59:03` inside the card | | |
+| `free_box_link` | none | Link named Level followed by a number, inside the tile; its href is the box's own page | 2026-10-11 |
+| `free_box_label` | none | Tile text exactly FREE (not LOCKED or a price) | 2026-10-11 |
+| `box_cooldown` | text like `12h 30m` or `11:59:03` inside the card | Same pattern, inside `cw-box-open-form` | |
 | `daily_free_reset` | none | `cw-daily-free-countdown`, outside the free-box grid; nested spans can produce compact text such as `23h22m15s`. Read for next-reset reporting, never used to decide claimability. | 2026-10-11 |
-| `open_free_box` | button named exactly "Open" / "Claim" / "Open free" inside the card | | |
-| `skip_animation` | button named "Skip" | | |
-| `result_dialog` | dialog containing "You won" / "You got" | | |
+| `box_open_form` | none | `cw-box-open-form` on the box page | 2026-10-11 |
+| `open_free_box` | button named exactly "Open" / "Claim" / "Open free" inside the card | Button named exactly "Open for Free" inside `cw-box-open-form`; Free Try and priced buttons do not match. The only clickable target. | 2026-10-11 |
+| `result_dialog` | dialog containing "You won" / "You got" (read only) | | |
 | `result_item_name` | heading inside the result dialog | | |
 | `result_item_value` | `$`/`€`/`£` amount inside the result dialog | | |
-| `close_result` | button named "Close" / "OK" / "Done" / "Keep" inside the dialog | | |
 | `warning_banner` | `role=alert` mentioning suspension, restriction, etc. | | |
 | `maintenance_notice` | text "under maintenance" | | |
 
 The recordings so far show navigation and the controls before an opening, not a
-verified completed claim and result. The individual box-page flow therefore
-supports `run --dry-run` only. The explicit Open for Free control is read to
-determine availability; Free Try, disabled controls and priced buttons do not
-count. It is not on the click allowlist. Automatic claims remain blocked until
-the complete opening/result flow is implemented and verified.
+completed claim and result. `run` therefore relies only on what was verified:
+it clicks the Open for Free button on a box page reached from a FREE tile, and
+nothing else. It does not click skip, close or keep controls; it leaves the
+result by navigating away. Success is decided by reloading the box page: an
+enabled Open for Free button with no countdown means the opening did not go
+through, and the run stops without trying again. The result selectors are only
+read, to name the item when they happen to match; until they are verified the
+screenshot saved for each opening is the record of what was won.
 
 Recording saves evidence; it does not update the program's selectors by itself.
-At most one page load is used per eligible linked box, in addition to the home
-and rewards pages. The configured page-load budget still applies.
+Each run uses one page load per FREE box, plus one more per box it opens, in
+addition to the home and rewards pages. The configured page-load budget still
+applies, and a box is never opened without a page load left to confirm it.
+
+### Next: verify the result screen
+
+After the first real `run`, look at `data/openings/`. For each opening there is
+a full-page screenshot and a JSON file with the site's non-GET responses. Use
+them to set `result_dialog`, `result_item_name` and `result_item_value` (or to
+read the item from the response instead), then mark those rows verified.
 
 ### Evidence reviewed on 2026-10-11
 

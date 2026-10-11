@@ -36,22 +36,22 @@ def routed(fake: FakeSite) -> Launch:
 
 
 def test_run_claims_in_persistent_profile(monkeypatch: pytest.MonkeyPatch, settings: Settings):
-    fake = FakeSite(boxes=[Box("Daily Box", item="Sticker")])
+    fake = FakeSite(boxes=[Box("Level 2", item="Sticker")])
     monkeypatch.setattr(cycle, "launch_profile", routed(fake))
-    monkeypatch.setattr(site, "unverified_click_targets", lambda: [])
     recorder = Recorder()
 
     result = cycle.perform_run(settings, dry_run=False, notifiers=[recorder])
 
     assert result.outcome is Outcome.CLAIMED, result.detail
     assert result.exit_code is ExitCode.SUCCESS
-    assert fake.opens == ["Daily Box"]
+    assert fake.opens == ["Level 2"]
     assert fake.paid_requests == []
     assert result.duration_ms > 0
     assert (settings.profile_dir / "Default").is_dir()
     [(message, screenshot)] = recorder.sent
     assert message.startswith("✅ Opened 1 free box for operator: *Sticker*")
-    assert screenshot is None
+    # The notification shows the opened box.
+    assert screenshot is not None and screenshot.parent == settings.openings_dir
 
 
 def test_run_refuses_to_click_with_unverified_selectors(
@@ -61,6 +61,7 @@ def test_run_refuses_to_click_with_unverified_selectors(
         raise AssertionError("browser launched")
 
     monkeypatch.setattr(cycle, "sync_playwright", no_browser)
+    monkeypatch.setattr(site, "unverified_click_targets", lambda: ["open_free_box"])
     recorder = Recorder()
 
     result = cycle.perform_run(settings, dry_run=False, notifiers=[recorder])
@@ -74,8 +75,9 @@ def test_run_refuses_to_click_with_unverified_selectors(
 def test_dry_run_works_with_unverified_selectors(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ):
-    fake = FakeSite(boxes=[Box("Daily Box")])
+    fake = FakeSite(boxes=[Box("Level 2")])
     monkeypatch.setattr(cycle, "launch_profile", routed(fake))
+    monkeypatch.setattr(site, "unverified_click_targets", lambda: ["open_free_box"])
 
     result = cycle.perform_run(settings, dry_run=True, notifiers=[])
 
@@ -86,7 +88,7 @@ def test_dry_run_works_with_unverified_selectors(
 def test_failure_notification_carries_screenshot(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ):
-    fake = FakeSite(boxes=[Box("Daily Box")], logged_in=False)
+    fake = FakeSite(boxes=[Box("Level 2")], logged_in=False)
     monkeypatch.setattr(cycle, "launch_profile", routed(fake))
     recorder = Recorder()
 
@@ -138,7 +140,7 @@ def test_profile_lock_blocks_a_second_holder(settings: Settings):
 
 
 def test_verify_session(monkeypatch: pytest.MonkeyPatch, settings: Settings):
-    fake = FakeSite(boxes=[Box("Daily Box")])
+    fake = FakeSite(boxes=[Box("Level 2")])
     monkeypatch.setattr(login, "launch_profile", routed(fake))
 
     assert login.verify_session(settings) == (ExitCode.SUCCESS, "operator")
@@ -226,7 +228,7 @@ def test_login_opens_plain_browser_then_verifies(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ):
     browsers = fake_popen(monkeypatch)
-    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Level 2")])))
     recorder = Recorder()
 
     assert login.login(settings, notifiers=[recorder]) == ExitCode.SUCCESS
@@ -341,7 +343,7 @@ def test_login_holds_profile_lock_while_browser_is_open(
             return super().wait(timeout)
 
     monkeypatch.setattr(login, "start_browser", lambda args: LockCheckingBrowser(args))
-    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Level 2")])))
 
     # The session check after the browser closes must find the lock released.
     assert login.login(settings) == ExitCode.SUCCESS
@@ -362,7 +364,7 @@ def test_login_refuses_while_profile_is_in_use(monkeypatch: pytest.MonkeyPatch, 
 def test_remote_login_posts_link_then_result(monkeypatch: pytest.MonkeyPatch, settings: Settings):
     remote = settings.model_copy(update={"vnc": True})
     browsers = fake_popen(monkeypatch)
-    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Level 2")])))
     recorder = Recorder()
 
     assert login.login(remote, notifiers=[recorder]) == ExitCode.SUCCESS
@@ -386,7 +388,7 @@ def test_remote_login_uses_configured_link(monkeypatch: pytest.MonkeyPatch, sett
         }
     )
     fake_popen(monkeypatch)
-    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Daily Box")])))
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite(boxes=[Box("Level 2")])))
     recorder = Recorder()
 
     login.login(remote, notifiers=[recorder])
@@ -447,7 +449,7 @@ def test_remote_login_times_out_then_checks_anyway(
 def test_remote_login_warns_on_captcha(monkeypatch: pytest.MonkeyPatch, settings: Settings):
     remote = settings.model_copy(update={"vnc": True})
     fake_popen(monkeypatch)
-    blocked = FakeSite(boxes=[Box("Daily Box")], title="Just a moment...")
+    blocked = FakeSite(boxes=[Box("Level 2")], title="Just a moment...")
     monkeypatch.setattr(login, "launch_profile", routed(blocked))
     recorder = Recorder()
 

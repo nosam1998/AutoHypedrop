@@ -3,12 +3,11 @@
 When hypedrop.com changes its UI, this should be the only file that needs an
 edit (PRD section 8, "Maintainability").
 
-Every locator below is a GUESS until the Phase 0 discovery spike checks it
-against the live site (see ``docs/discovery.md``). A target is trusted only
-once its ``verified`` field holds the date it was last checked. ``run``
-refuses to click anything while a target on the click allowlist is
-unverified; ``run --dry-run`` still works, so it can be used to do the
-verification.
+A locator is a GUESS until the Phase 0 discovery spike checks it against the
+live site (see ``docs/discovery.md``). A target is trusted only once its
+``verified`` field holds the date it was last checked. ``run`` refuses to click
+anything while the click target or a container that scopes it is unverified;
+``run --dry-run`` still works, so it can be used to do the verification.
 
 Prefer role- and text-based locators over CSS classes, which change on every
 frontend deploy.
@@ -87,29 +86,21 @@ FREE_DROPS_LINK = Target(
 
 FREE_DROPS_REGION = Target(
     "free_drops_region",
-    "Container for the free-drop cards. Its presence proves we are on the Free Drops page.",
-    lambda root: root.get_by_role("region", name=re.compile(r"free drops?", re.I)).or_(
-        root.locator("cw-free-boxes-grid")
-    ),
+    "The rewards page's free-box grid. Its presence proves we are on the Free Drop page.",
+    lambda root: root.locator("cw-free-boxes-grid"),
+    verified="2026-10-11",
 )
 
 FREE_BOX_CARD = Target(
     "free_box_card",
-    "One free box. Searched for only inside FREE_DROPS_REGION.",
-    lambda root: root.get_by_role("article").or_(root.locator("cw-box-grid-item-ecommerce")),
-)
-
-CARD_NAME = Target(
-    "card_name",
-    "Box name inside a card.",
-    lambda card: card.get_by_role("heading").or_(
-        card.get_by_role("link", name=re.compile(r"^\s*level\s+\d+\s*$", re.I))
-    ),
+    "One level-box tile. Searched for only inside FREE_DROPS_REGION.",
+    lambda root: root.locator("cw-box-grid-item-ecommerce"),
+    verified="2026-10-11",
 )
 
 FREE_BOX_LINK = Target(
     "free_box_link",
-    "Link from a level box's rewards tile to its individual page.",
+    "Link from a level box's rewards tile to its individual page; its text names the box.",
     lambda card: card.get_by_role("link", name=re.compile(r"^\s*level\s+\d+\s*$", re.I)),
     verified="2026-10-11",
 )
@@ -128,25 +119,21 @@ DAILY_FREE_RESET = Target(
     verified="2026-10-11",
 )
 
+
+# --- Individual box page ------------------------------------------------------
+
 BOX_OPEN_FORM = Target(
     "box_open_form",
-    "Opening controls on an individual box page, used only for read-only discovery.",
+    "Opening controls on an individual box page. Scopes the only clickable control.",
     lambda root: root.locator("cw-box-open-form"),
     verified="2026-10-11",
 )
 
-LINKED_FREE_OPEN = Target(
-    "linked_free_open",
-    "Explicit Open for Free button, excluding Free Try and paid opening buttons.",
-    lambda form: form.get_by_role("button", name=re.compile(r"^\s*open for free\s*$", re.I)),
-    verified="2026-10-11",
-)
-
-CARD_COOLDOWN = Target(
-    "card_cooldown",
-    "Countdown shown on a card that is not claimable yet, e.g. '12h 30m', '4m 10s' or "
-    "'11:59:03'. Needs two units so a box named '24h Case' is not mistaken for a timer.",
-    lambda card: card.get_by_text(
+BOX_COOLDOWN = Target(
+    "box_cooldown",
+    "Countdown shown in BOX_OPEN_FORM while the box is not claimable, e.g. '12h 30m', "
+    "'4m 10s' or '11:59:03'. Needs two units so a stray '24h' is not mistaken for a timer.",
+    lambda form: form.get_by_text(
         re.compile(
             r"\b\d{1,2}\s*h\s*\d{1,2}\s*m\b|\b\d{1,2}\s*m\s*\d{1,2}\s*s\b|\b\d{1,2}:\d{2}:\d{2}\b",
             re.I,
@@ -156,21 +143,18 @@ CARD_COOLDOWN = Target(
 
 OPEN_FREE_BOX = Target(
     "open_free_box",
-    "The button that opens a free box. Scoped to one card; the label must be exactly "
-    "'Open', 'Claim', 'Open free', and similar, so a priced 'Open for $5' never matches.",
-    lambda card: card.get_by_role(
-        "button", name=re.compile(r"^\s*(open|claim)(\s+(free|box|now|for free))?\s*$", re.I)
-    ),
+    "The Open for Free button inside BOX_OPEN_FORM. The label must be exactly that, so "
+    "Free Try (a simulation) and priced 'Open for $2.00' buttons never match.",
+    lambda form: form.get_by_role("button", name=re.compile(r"^\s*open for free\s*$", re.I)),
+    verified="2026-10-11",
 )
 
 
-# --- Opening result -----------------------------------------------------------
+# --- Opening result (read only) -----------------------------------------------
 
-SKIP_ANIMATION = Target(
-    "skip_animation",
-    "Optional control that skips the box-opening animation.",
-    lambda root: root.get_by_role("button", name=re.compile(r"^\s*skip( animation)?\s*$", re.I)),
-)
+# Nothing here is ever clicked. The run confirms an opening by reloading the box
+# page, and leaves any result overlay by navigating away, so a wrong guess below
+# only costs the item name in the notification.
 
 RESULT_DIALOG = Target(
     "result_dialog",
@@ -190,14 +174,6 @@ RESULT_ITEM_VALUE = Target(
     "result_item_value",
     "Won item's displayed value, inside RESULT_DIALOG.",
     lambda dialog: dialog.get_by_text(re.compile(r"[$€£]\s?\d")),
-)
-
-CLOSE_RESULT = Target(
-    "close_result",
-    "Control that dismisses RESULT_DIALOG and keeps the item. Never 'Sell'.",
-    lambda dialog: dialog.get_by_role(
-        "button", name=re.compile(r"^\s*(close|ok|done|continue|keep( it)?)\s*$", re.I)
-    ),
 )
 
 
@@ -256,13 +232,16 @@ COST_PATTERN = re.compile(
 
 # --- Click allowlist (FR-9) ---------------------------------------------------
 
-# The only targets the tool may ever click. Anything else is a programming
-# error and raises before the browser is touched.
-CLICK_ALLOWLIST: frozenset[Target] = frozenset({OPEN_FREE_BOX, SKIP_ANIMATION, CLOSE_RESULT})
+# The only target the tool may ever click. Anything else is a programming error
+# and raises before the browser is touched.
+CLICK_ALLOWLIST: frozenset[Target] = frozenset({OPEN_FREE_BOX})
 
-# Containers that scope where allowlisted clicks can land. A wrong guess here is
-# as dangerous as a wrong button, so they are held to the same standard.
-CLICK_SCOPES: frozenset[Target] = frozenset({FREE_DROPS_REGION, FREE_BOX_CARD, RESULT_DIALOG})
+# Containers that decide which pages and tiles a click can happen on. A wrong
+# guess here is as dangerous as a wrong button, so they are held to the same
+# standard.
+CLICK_SCOPES: frozenset[Target] = frozenset(
+    {FREE_DROPS_REGION, FREE_BOX_CARD, FREE_BOX_LINK, FREE_BOX_LABEL, BOX_OPEN_FORM}
+)
 
 
 def unverified_click_targets() -> list[str]:

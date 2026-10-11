@@ -1,8 +1,9 @@
 # Test fixtures
 
-`tests/fakesite.py` currently stands in for hypedrop.com. Its markup follows the
-*guessed* locators in `src/autohypedrop/site_selectors.py`, so today's tests
-prove the flow and the safety rails, not that the selectors match the real site.
+`tests/fakesite.py` stands in for hypedrop.com. Its rewards grid and box pages
+follow the structure recorded on 2026-10-11; the result shown after opening a box
+is still synthetic and follows the *guessed* result locators in
+`src/autohypedrop/site_selectors.py`.
 
 `rewards-linked-boxes.html` and `daily-free-countdown.html` are reduced, scrubbed
 fixtures based on the 2026-10-11 recordings. They cover the regional rewards

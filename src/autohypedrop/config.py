@@ -63,11 +63,14 @@ class Settings(BaseSettings):
     login_timeout_minutes: int = Field(default=30, ge=1)
 
     max_clicks_per_run: int = Field(default=25, ge=1)
-    max_page_loads_per_run: int = Field(default=10, ge=1)
+    # Two per free box (open it, then reload to confirm), plus home and rewards.
+    max_page_loads_per_run: int = Field(default=20, ge=1)
     pace_min_ms: int = Field(default=800, ge=0)
     pace_max_ms: int = Field(default=3000, ge=0)
     timeout_ms: int = Field(default=20_000, ge=1_000)
     result_timeout_ms: int = Field(default=30_000, ge=1_000)
+    # An opening counts as settled once the network has been quiet this long.
+    opening_settle_ms: int = Field(default=5_000, ge=0)
 
     log_level: Literal["debug", "info", "warning", "error"] = "info"
 
@@ -106,6 +109,10 @@ class Settings(BaseSettings):
     @property
     def traces_dir(self) -> Path:
         return self.data_dir / "traces"
+
+    @property
+    def openings_dir(self) -> Path:
+        return self.data_dir / "openings"
 
     @property
     def discovery_dir(self) -> Path:
