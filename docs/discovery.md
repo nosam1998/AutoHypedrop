@@ -39,7 +39,7 @@ the main verification tool.
 | # | Assumption | Finding | Date |
 |---|---|---|---|
 | A1 | Free Drops page URL and DOM structure of a claimable box | The Free Drop navigation link points to `/na/rewards` for this account. The grid links to separate `/boxes/view/na/level-*` pages. Dry-run discovery follows same-site links and checks each eligible page's explicit Open for Free control. | 2026-10-11 |
-| A2 | Reset behaviour: fixed time vs. rolling 24h | | |
+| A2 | Reset behaviour: fixed time vs. rolling 24h | Rewards has a shared `cw-daily-free-countdown` reading "Resets in" followed by hours/minutes/seconds, including when boxes are available. Discovery reports this timer. The exact reset policy still needs observation across a completed claim/reset. | 2026-10-11 |
 | A3 | Logged-in cookie jar survives 7+ days without re-auth | | |
 | A4 | Cloudflare or similar bot management in use | | |
 | A5 | Opening is a single click, or multi-step with animation/confirm | | |
@@ -63,6 +63,7 @@ today, before anyone has looked at the real page.
 | `free_box_card` | `article` inside the region | `cw-box-grid-item-ecommerce` inside that grid; inspect only tiles explicitly labelled FREE, excluding LOCKED and priced tiles | 2026-10-11 |
 | `card_name` | heading inside the card | Link named Level followed by a number | 2026-10-11 |
 | `card_cooldown` | text like `12h 30m` or `11:59:03` inside the card | | |
+| `daily_free_reset` | none | `cw-daily-free-countdown`, outside the free-box grid; nested spans can produce compact text such as `23h22m15s`. Read for next-reset reporting, never used to decide claimability. | 2026-10-11 |
 | `open_free_box` | button named exactly "Open" / "Claim" / "Open free" inside the card | | |
 | `skip_animation` | button named "Skip" | | |
 | `result_dialog` | dialog containing "You won" / "You got" | | |
@@ -82,6 +83,29 @@ the complete opening/result flow is implemented and verified.
 Recording saves evidence; it does not update the program's selectors by itself.
 At most one page load is used per eligible linked box, in addition to the home
 and rewards pages. The configured page-load budget still applies.
+
+### Evidence reviewed on 2026-10-11
+
+Both supplied discovery sessions contain the rewards grid and individual level
+pages before opening. Their recorded GraphQL requests include `FreeBoxesGrid`,
+`BoxView` and `UserBoxList`; these are GET reads. Neither trace contains a
+completed opening transaction or a captured prize-result state. No opening or
+result selector was marked verified from this evidence.
+
+Older snapshot filenames and index URLs can lag one route behind the DOM:
+terminal input prevented Playwright from processing navigation events before
+reading its cached URL. Use the DOM to interpret those existing recordings.
+The recorder now reads URL, title and HTML together from the browser, rejects
+captures that navigate while taking the screenshot, and records the artifact
+filenames in `index.jsonl`. It also closes the browser if trace saving fails
+and reports profile-in-use errors without a traceback.
+
+The remaining recording needs three snapshots: the eligible box before a
+manual **Open for Free**, the final prize result with its name/value and close
+control, and the box controls after closing that result. Wait for each state
+to finish rendering before pressing Enter, then finish with `q` in the terminal
+to save the trace. A **Free Try** simulation is not evidence of a completed
+free claim.
 
 ## Checklist
 
