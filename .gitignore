@@ -1,5 +1,6 @@
 # Runtime state: browser profile (holds your session), screenshots, traces.
 data/
+/data.zip
 .env
 
 # Python

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
+from time import monotonic
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from playwright.sync_api import Error as PlaywrightError
@@ -20,12 +22,12 @@ from autohypedrop.session import check_stop_conditions
 log = get_logger(__name__)
 
 _CLOCK = re.compile(r"\b(\d{1,2}):(\d{2}):(\d{2})\b")
-_UNITS = re.compile(r"(\d+)\s*(d|h|m|s)\b", re.I)
+_UNITS = re.compile(r"(\d+)\s*(d|h|m|s)(?=\d|\b)", re.I)
 _UNIT_SECONDS = {"d": 86_400, "h": 3_600, "m": 60, "s": 1}
 
 
 def parse_countdown(text: str) -> int | None:
-    """Seconds left in a countdown like ``12h 30m`` or ``11:59:03``; ``None`` if absent."""
+    """Seconds left in ``12h 30m``, ``12h30m`` or ``11:59:03``; ``None`` if absent."""
     if clock := _CLOCK.search(text):
         hours, minutes, seconds = (int(part) for part in clock.groups())
         return hours * 3_600 + minutes * 60 + seconds
@@ -211,6 +213,12 @@ def claim_all(page: Page, actions: SafeActions, settings: Settings, result: RunR
     still reports what it opened.
     """
     open_free_drops(page, actions, settings)
+    reset = site.DAILY_FREE_RESET(page).filter(visible=True)
+    reset_text = _text(reset) if reset.count() == 1 else None
+    reset_seconds = parse_countdown(reset_text) if reset_text else None
+    # Read before leaving rewards for individual box pages. This timer is
+    # displayed even while boxes are claimable, so do not use it as a cooldown.
+    reset_deadline = monotonic() + reset_seconds if reset_seconds is not None else None
     if page.locator("cw-free-boxes-grid").filter(visible=True).count():
         result.boxes_seen = inspect_linked_boxes(page, actions, settings)
     else:
@@ -233,4 +241,6 @@ def claim_all(page: Page, actions: SafeActions, settings: Settings, result: RunR
             result.boxes_seen = enumerate_boxes(page)
 
     cooldowns = [b.cooldown_seconds for b in result.boxes_seen if b.cooldown_seconds is not None]
+    if reset_deadline is not None:
+        cooldowns.append(max(0, math.ceil(reset_deadline - monotonic())))
     result.next_reset_seconds = min(cooldowns, default=None)

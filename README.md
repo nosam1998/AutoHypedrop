@@ -104,10 +104,19 @@ unexpected page, safety stop). Every run ends with one JSON log line,
 
 The dry run follows the site's Free Drop navigation link (for example,
 `/na/rewards`) and checks eligible level boxes on their individual pages.
+It also reports the shared daily reset countdown from the rewards page. That
+timer can appear while boxes are available; it does not make them unavailable.
 Recording saves snapshots for updating the code; it does not train or configure
 the automation automatically. The recorded individual-box opening/result flow
 has not yet been verified, so automatic claims remain blocked. See
 `docs/discovery.md` for the verified discovery behavior and remaining work.
+
+For a useful opening recording, run `make record`, capture an eligible box before
+opening it, capture the finished prize result, then capture its controls after
+closing the result. Press Enter in the terminal for each snapshot and finish
+with `q` so the trace is saved before Chromium closes. Snapshot filenames and
+`index.jsonl` now use the page URL captured with the HTML, including after
+in-page navigation. Keep `data/` and any `data.zip` archive private.
 
 ## Discord warnings
 

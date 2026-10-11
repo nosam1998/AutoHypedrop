@@ -4,6 +4,12 @@
 *guessed* locators in `src/autohypedrop/site_selectors.py`, so today's tests
 prove the flow and the safety rails, not that the selectors match the real site.
 
+`rewards-linked-boxes.html` and `daily-free-countdown.html` are reduced, scrubbed
+fixtures based on the 2026-10-11 recordings. They cover the regional rewards
+links, level-box tiles and shared reset timer. Priced/disabled states in tests
+are synthetic negative cases. Opening-result fixtures are still synthetic;
+the recordings do not contain a completed opening.
+
 Phase 0 (`docs/discovery.md`) replaces that guesswork. To add a real page as a
 fixture:
 

@@ -14,13 +14,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, sync_playwright
 
 from autohypedrop.config import Settings
 from autohypedrop.log import get_logger
 from autohypedrop.login import has_display
 from autohypedrop.outcome import ExitCode
-from autohypedrop.session import launch_profile
+from autohypedrop.session import ProfileInUseError, launch_profile
 
 log = get_logger(__name__)
 
@@ -30,6 +31,11 @@ checklist in docs/discovery.md. Back in this terminal:
 
   Enter   save the current tab's HTML, a screenshot and its URL
   q       stop, save the trace and close the browser
+
+For opening-flow discovery, capture an eligible box before opening it, the
+finished prize result, and the same box's controls after the result is closed.
+Wait for each page to finish loading before pressing Enter. Finish with q here
+so the trace can be saved before the browser closes.
 
 Snapshots go to {snapshots}. The trace goes to {traces}.
 Both can contain your username, balance and session cookies: keep them private
@@ -43,18 +49,41 @@ def strip_query(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
+class SnapshotChanged(RuntimeError):
+    """Navigation made the screenshot and HTML describe different pages."""
+
+
 def capture_snapshot(page: Page, out_dir: Path, number: int) -> Path:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = urlsplit(page.url).path.lower()
+    # input() blocks Playwright's event dispatch. page.url can still describe
+    # the previous SPA route, so read the URL, title and DOM together in the
+    # browser instead of using cached properties before an API call.
+    snapshot = page.evaluate(
+        """() => ({
+            url: location.href,
+            title: document.title,
+            html: (document.doctype
+                ? new XMLSerializer().serializeToString(document.doctype) + '\\n' : '')
+                + document.documentElement.outerHTML
+        })"""
+    )
+    pixels = page.screenshot(full_page=True)
+    if page.evaluate("location.href") != snapshot["url"]:
+        raise SnapshotChanged("The page changed during capture; wait for it to load and retry.")
+
+    path = urlsplit(snapshot["url"]).path.lower()
     slug = re.sub(r"[^a-z0-9]+", "-", path).strip("-") or "home"
+    out_dir.mkdir(parents=True, exist_ok=True)
     stem = out_dir / f"{number:02d}-{slug}"
     html = stem.with_suffix(".html")
-    html.write_text(page.content(), encoding="utf-8")
-    page.screenshot(path=stem.with_suffix(".png"), full_page=True)
+    screenshot = stem.with_suffix(".png")
+    html.write_text(snapshot["html"], encoding="utf-8")
+    screenshot.write_bytes(pixels)
     entry = {
         "n": number,
-        "url": strip_query(page.url),
-        "title": page.title(),
+        "url": strip_query(snapshot["url"]),
+        "title": snapshot["title"],
+        "html": html.name,
+        "screenshot": screenshot.name,
         "captured_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     with (out_dir / "index.jsonl").open("a", encoding="utf-8") as index:
@@ -75,34 +104,60 @@ def record(settings: Settings) -> int:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     snapshots = settings.discovery_dir / stamp
     trace = settings.traces_dir / f"discovery-{stamp}.zip"
-    settings.traces_dir.mkdir(parents=True, exist_ok=True)
-
     count = 0
-    with sync_playwright() as playwright:
-        context = launch_profile(playwright, settings, headless=False)
-        context.tracing.start(screenshots=True, snapshots=True)
-        try:
-            page = context.pages[0] if context.pages else context.new_page()
-            page.goto(settings.base_url)
-            print(INSTRUCTIONS.format(snapshots=snapshots, traces=trace), flush=True)
-            while True:
+    trace_started = False
+    trace_saved = False
+    try:
+        settings.traces_dir.mkdir(parents=True, exist_ok=True)
+        with sync_playwright() as playwright:
+            context = launch_profile(playwright, settings, headless=False)
+            try:
+                context.tracing.start(screenshots=True, snapshots=True)
+                trace_started = True
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto(settings.base_url, timeout=settings.timeout_ms)
+                print(INSTRUCTIONS.format(snapshots=snapshots, traces=trace), flush=True)
+                while True:
+                    try:
+                        command = input("[Enter] capture  [q] finish > ").strip().lower()
+                    except EOFError:
+                        break
+                    if command == "q":
+                        break
+                    if not context.pages:
+                        print("All tabs are closed; finishing.")
+                        break
+                    try:
+                        saved = capture_snapshot(context.pages[-1], snapshots, count + 1)
+                    except (SnapshotChanged, PlaywrightError) as exc:
+                        print(f"Snapshot not saved: {str(exc).splitlines()[0]}", file=sys.stderr)
+                        continue
+                    count += 1
+                    print(f"  saved {saved.name}")
+            except KeyboardInterrupt:
+                pass
+            finally:
+                # Even a failed trace start/save must release the browser and
+                # profile lock, otherwise the next login/record/run can fail.
                 try:
-                    command = input("[Enter] capture  [q] finish > ").strip().lower()
-                except EOFError:
-                    break
-                if command == "q":
-                    break
-                if not context.pages:
-                    print("All tabs are closed; finishing.")
-                    break
-                count += 1
-                saved = capture_snapshot(context.pages[-1], snapshots, count)
-                print(f"  saved {saved.name}")
-        except KeyboardInterrupt:
-            pass
-        finally:
-            context.tracing.stop(path=trace)
-            context.close()
+                    if trace_started:
+                        context.tracing.stop(path=trace)
+                        trace_saved = True
+                finally:
+                    context.close()
+    except ProfileInUseError as exc:
+        print(f"Could not start recording: {exc}", file=sys.stderr)
+        return ExitCode.NEEDS_HUMAN
+    except (PlaywrightError, OSError) as exc:
+        print(f"Recording failed: {str(exc).splitlines()[0]}", file=sys.stderr)
+        if trace_saved:
+            print(f"The trace was saved to {trace}.", file=sys.stderr)
+        print(f"Any completed snapshots are in {snapshots}.", file=sys.stderr)
+        return ExitCode.ERROR
+
+    if not trace_saved:
+        print("Recording stopped before a trace could be saved.", file=sys.stderr)
+        return ExitCode.ERROR
 
     log.info("record_done", snapshots=count, directory=str(snapshots), trace=str(trace))
     print(f"Saved {count} snapshot(s) to {snapshots} and the trace to {trace}.")

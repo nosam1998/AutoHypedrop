@@ -121,6 +121,13 @@ FREE_BOX_LABEL = Target(
     verified="2026-10-11",
 )
 
+DAILY_FREE_RESET = Target(
+    "daily_free_reset",
+    "Shared daily reset countdown above the free-box grid; not a box eligibility marker.",
+    lambda root: root.locator("cw-daily-free-countdown"),
+    verified="2026-10-11",
+)
+
 BOX_OPEN_FORM = Target(
     "box_open_form",
     "Opening controls on an individual box page, used only for read-only discovery.",

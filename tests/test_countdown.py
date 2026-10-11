@@ -14,6 +14,9 @@ from autohypedrop.notify import format_duration
         ("11:59:03", 11 * 3600 + 59 * 60 + 3),
         ("Next box 1d 2h", 26 * 3600),
         ("45m 10s", 45 * 60 + 10),
+        ("Resets in 23h22m15s", 23 * 3600 + 22 * 60 + 15),
+        ("1d2h3m4s", 26 * 3600 + 3 * 60 + 4),
+        ("12months", None),
         ("Claim now", None),
     ],
 )
