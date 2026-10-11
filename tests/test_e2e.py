@@ -239,6 +239,77 @@ def test_login_opens_plain_browser_then_verifies(
     assert recorder.sent == []
 
 
+def test_login_reuses_valid_saved_session_without_interaction(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, capsys: pytest.CaptureFixture[str]
+):
+    fake = FakeSite()
+    monkeypatch.setattr(login, "launch_profile", routed(fake))
+    assert login.verify_session(settings)[0] == ExitCode.SUCCESS
+    browsers = fake_popen(monkeypatch)
+    recorder = Recorder()
+    remote = settings.model_copy(update={"vnc": True})
+
+    assert login.login(remote, notifiers=[recorder]) == ExitCode.SUCCESS
+
+    assert browsers == []
+    assert recorder.sent == []
+    assert "Already signed in. Reusing the saved session" in capsys.readouterr().out
+    assert fake.page_loads == ["/", "/"]
+    assert fake.opens == []
+    assert fake.paid_requests == []
+
+
+def test_expired_session_opens_login_and_verifies_again(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    fake = FakeSite()
+    monkeypatch.setattr(login, "launch_profile", routed(fake))
+    assert login.verify_session(settings)[0] == ExitCode.SUCCESS
+    fake.logged_in = False
+    browsers = fake_popen(monkeypatch)
+    popen = login.start_browser
+
+    def sign_in(args: list[str]):
+        fake.logged_in = True
+        return popen(args)
+
+    monkeypatch.setattr(login, "start_browser", sign_in)
+
+    assert login.login(settings) == ExitCode.SUCCESS
+
+    assert len(browsers) == 1
+    assert fake.page_loads == ["/", "/", "/"]
+
+
+def test_force_login_opens_browser_even_with_valid_session(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    fake = FakeSite()
+    monkeypatch.setattr(login, "launch_profile", routed(fake))
+    assert login.verify_session(settings)[0] == ExitCode.SUCCESS
+    browsers = fake_popen(monkeypatch)
+
+    assert login.login(settings, force=True) == ExitCode.SUCCESS
+
+    assert len(browsers) == 1
+    # One setup check plus one check after closing; no preflight with --force.
+    assert fake.page_loads == ["/", "/"]
+
+
+def test_saved_login_respects_profile_lock(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    monkeypatch.setattr(login, "launch_profile", routed(FakeSite()))
+    assert login.verify_session(settings)[0] == ExitCode.SUCCESS
+    browsers = fake_popen(monkeypatch)
+    holder = session.ProfileLock(settings.profile_dir)
+    holder.acquire()
+    try:
+        assert login.login(settings) == ExitCode.ERROR
+    finally:
+        holder.release()
+
+    assert browsers == []
+
+
 def test_login_browser_skips_sandbox_only_where_chromium_cannot_use_it(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ):

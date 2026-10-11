@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from autohypedrop import cli, cycle
+from autohypedrop import cli, cycle, login
 from autohypedrop.outcome import ExitCode, Outcome, RunResult
 
 
@@ -68,3 +68,17 @@ def test_command_is_required(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:
         cli.main([])
     assert exit_info.value.code == 2
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_login_passes_force(monkeypatch: pytest.MonkeyPatch, force: bool) -> None:
+    seen: list[bool] = []
+
+    def fake(_settings: object, *, force: bool) -> int:
+        seen.append(force)
+        return ExitCode.SUCCESS
+
+    monkeypatch.setattr(login, "login", fake)
+
+    assert cli.main(["login", *(["--force"] if force else [])]) == ExitCode.SUCCESS
+    assert seen == [force]

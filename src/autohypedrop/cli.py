@@ -19,7 +19,7 @@ log = get_logger(__name__)
 def _login(settings: Settings, args: argparse.Namespace) -> int:
     from autohypedrop.login import login
 
-    return login(settings)
+    return login(settings, force=args.force)
 
 
 def _run(settings: Settings, args: argparse.Namespace) -> int:
@@ -44,7 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     login = commands.add_parser(
         "login",
-        help="sign in once by hand in a normal browser window, then check the session",
+        help="reuse the saved session, or open a normal browser to sign in with Google",
+    )
+    login.add_argument(
+        "--force",
+        action="store_true",
+        help="open the sign-in browser even when the saved session is valid",
     )
     login.set_defaults(handler=_login)
 

@@ -1,10 +1,10 @@
-"""One-time human sign-in into the persistent profile (FR-1, FR-2).
+"""Reuse a saved session, or open a browser for one-time sign-in (FR-1, FR-2).
 
 Google blocks sign-in from automation-controlled browsers, so ``login`` does
 not use Playwright to show the page. It starts the same Chromium build as a
 plain browser on the profile directory and lets the operator sign in by
-hand. Only after that window is closed does Playwright open the profile, to
-check that the session works.
+hand. Existing profiles are checked first so a valid session needs no sign-in
+window. After a manual sign-in, Playwright checks the profile again.
 
 Run in Docker with ``AHD_VNC=true`` (the compose ``login`` service), the
 window is shown on a noVNC web page instead of a local screen, and the link to
@@ -209,7 +209,9 @@ def _check(settings: Settings) -> tuple[ExitCode, str, str, bool]:
     )
 
 
-def login(settings: Settings, notifiers: Sequence[Notifier] | None = None) -> int:
+def login(
+    settings: Settings, notifiers: Sequence[Notifier] | None = None, *, force: bool = False
+) -> int:
     if not settings.headless and not has_display():
         print(
             f"No display found. In Docker, run `{LOGIN_COMMAND}`; the link to the login "
@@ -220,6 +222,21 @@ def login(settings: Settings, notifiers: Sequence[Notifier] | None = None) -> in
     if problem := exposure_problem(settings):
         print(problem, file=sys.stderr)
         return ExitCode.ERROR
+
+    # Both regular Chromium and headless-shell persist the Default directory;
+    # headless-shell does not necessarily create the top-level Local State file.
+    if not force and (settings.profile_dir / "Default").is_dir():
+        print("Checking the saved session...", flush=True)
+        code, text, _, _ = _check(settings)
+        if code == ExitCode.SUCCESS:
+            log.info("login_session_reused", profile=str(settings.profile_dir))
+            print("Already signed in. Reusing the saved session; no login is needed.", flush=True)
+            return ExitCode.SUCCESS
+        if code == ExitCode.ERROR:
+            # A locked/unlaunchable profile must not be opened a second time.
+            print(text, file=sys.stderr, flush=True)
+            return code
+        print(f"{text}\nOpening the browser so you can finish signing in.", flush=True)
 
     link = login_link(settings)
     # Chat only hears about remote logins; a local one is watched in this terminal.
