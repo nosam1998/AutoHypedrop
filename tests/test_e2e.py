@@ -154,6 +154,37 @@ def test_verify_session_logged_out(monkeypatch: pytest.MonkeyPatch, settings: Se
     assert stop.value.outcome is Outcome.SESSION_EXPIRED
 
 
+def test_verify_session_account_link_includes_level_badge(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    class AccountHeaderSite(FakeSite):
+        def _nav(self) -> str:
+            # Reduced reproduction of the live header; no real account ID.
+            return (
+                '<nav><a href="/player/fixture-user"><span>67</span> <span>ACCOUNT</span></a></nav>'
+            )
+
+    fake = AccountHeaderSite()
+    monkeypatch.setattr(login, "launch_profile", routed(fake))
+
+    assert login.verify_session(settings) == (ExitCode.SUCCESS, None)
+    assert fake.page_loads == ["/"]
+    assert fake.opens == []
+    assert fake.paid_requests == []
+
+
+@pytest.mark.parametrize("label", ["Account settings", "Create account", "67 Account history"])
+def test_account_related_links_do_not_prove_login(settings: Settings, label: str):
+    with sync_playwright() as playwright:
+        context = session.launch_profile(playwright, settings)
+        try:
+            page = context.new_page()
+            page.set_content(f'<a href="/account">{label}</a>')
+            assert site.LOGGED_IN_INDICATOR(page).count() == 0
+        finally:
+            context.close()
+
+
 class FakeBrowser:
     """Stands in for the plain Chromium process started by ``login``."""
 
