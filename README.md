@@ -102,6 +102,13 @@ to claim or kill switch engaged, `3` needs a human (session expired, challenge,
 unexpected page, safety stop). Every run ends with one JSON log line,
 `run_end`, carrying the outcome, the items won and the duration.
 
+The dry run follows the site's Free Drop navigation link (for example,
+`/na/rewards`) and checks eligible level boxes on their individual pages.
+Recording saves snapshots for updating the code; it does not train or configure
+the automation automatically. The recorded individual-box opening/result flow
+has not yet been verified, so automatic claims remain blocked. See
+`docs/discovery.md` for the verified discovery behavior and remaining work.
+
 ## Discord warnings
 
 Set `AHD_NOTIFY_DISCORD_WEBHOOK` and the tool warns you whenever a run hits an

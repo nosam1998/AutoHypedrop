@@ -45,7 +45,6 @@ class Target:
 # --- Paths --------------------------------------------------------------------
 
 HOME_PATH = "/"
-FREE_DROPS_PATH = "/free-drops"  # unverified guess (assumption A1)
 
 
 # --- Session ------------------------------------------------------------------
@@ -79,22 +78,61 @@ ACCOUNT_NAME = Target(
 
 # --- Free Drops page ----------------------------------------------------------
 
+FREE_DROPS_LINK = Target(
+    "free_drops_link",
+    "Navigation link to the account's Free Drop page; the route varies by region.",
+    lambda root: root.get_by_role("link", name=re.compile(r"^\s*free drops?\s*$", re.I)),
+    verified="2026-10-11",
+)
+
 FREE_DROPS_REGION = Target(
     "free_drops_region",
     "Container for the free-drop cards. Its presence proves we are on the Free Drops page.",
-    lambda root: root.get_by_role("region", name=re.compile(r"free drops?", re.I)),
+    lambda root: root.get_by_role("region", name=re.compile(r"free drops?", re.I)).or_(
+        root.locator("cw-free-boxes-grid")
+    ),
 )
 
 FREE_BOX_CARD = Target(
     "free_box_card",
     "One free box. Searched for only inside FREE_DROPS_REGION.",
-    lambda root: root.get_by_role("article"),
+    lambda root: root.get_by_role("article").or_(root.locator("cw-box-grid-item-ecommerce")),
 )
 
 CARD_NAME = Target(
     "card_name",
     "Box name inside a card.",
-    lambda card: card.get_by_role("heading"),
+    lambda card: card.get_by_role("heading").or_(
+        card.get_by_role("link", name=re.compile(r"^\s*level\s+\d+\s*$", re.I))
+    ),
+)
+
+FREE_BOX_LINK = Target(
+    "free_box_link",
+    "Link from a level box's rewards tile to its individual page.",
+    lambda card: card.get_by_role("link", name=re.compile(r"^\s*level\s+\d+\s*$", re.I)),
+    verified="2026-10-11",
+)
+
+FREE_BOX_LABEL = Target(
+    "free_box_label",
+    "Explicit FREE eligibility label on a rewards tile; LOCKED and prices do not match.",
+    lambda card: card.get_by_text(re.compile(r"^\s*FREE\s*$")),
+    verified="2026-10-11",
+)
+
+BOX_OPEN_FORM = Target(
+    "box_open_form",
+    "Opening controls on an individual box page, used only for read-only discovery.",
+    lambda root: root.locator("cw-box-open-form"),
+    verified="2026-10-11",
+)
+
+LINKED_FREE_OPEN = Target(
+    "linked_free_open",
+    "Explicit Open for Free button, excluding Free Try and paid opening buttons.",
+    lambda form: form.get_by_role("button", name=re.compile(r"^\s*open for free\s*$", re.I)),
+    verified="2026-10-11",
 )
 
 CARD_COOLDOWN = Target(
