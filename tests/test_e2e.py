@@ -6,7 +6,10 @@ starts its own Playwright, and the sync API cannot nest.
 
 from __future__ import annotations
 
+import os
+import socket
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -137,6 +140,67 @@ def test_profile_lock_blocks_a_second_holder(settings: Settings):
     finally:
         first.release()
     session.ProfileLock(settings.profile_dir).acquire()
+
+
+def stale_chromium_lock(profile: Path, owner: str) -> None:
+    profile.mkdir(parents=True, exist_ok=True)
+    os.symlink(owner, profile / "SingletonLock")
+    os.symlink("/tmp/gone/SingletonSocket", profile / "SingletonSocket")
+    os.symlink("1234567890", profile / "SingletonCookie")
+
+
+def chromium_lock_files(profile: Path) -> list[str]:
+    return sorted(f.name for f in profile.iterdir() if f.name.startswith("Singleton"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Chromium's lock is a symlink on POSIX")
+def test_lock_left_by_a_browser_in_another_container_is_cleared(settings: Settings):
+    # A killed browser in an earlier container leaves its hostname in the lock,
+    # and Chromium would refuse the profile as "in use on another computer".
+    stale_chromium_lock(settings.profile_dir, "3f2a9c1d0e4b-58")
+    with sync_playwright() as playwright:
+        session.launch_profile(playwright, settings).close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Chromium's lock is a symlink on POSIX")
+def test_lock_of_a_dead_browser_on_this_host_is_cleared(settings: Settings):
+    stale_chromium_lock(settings.profile_dir, f"{socket.gethostname()}-999999999")
+
+    lock = session.ProfileLock(settings.profile_dir)
+    lock.acquire()
+    lock.release()
+
+    assert chromium_lock_files(settings.profile_dir) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Chromium's lock is a symlink on POSIX")
+def test_lock_of_a_running_browser_on_this_host_is_kept(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    monkeypatch.setattr(session, "_chromium_running", lambda pid: pid == 4242)
+    stale_chromium_lock(settings.profile_dir, f"{socket.gethostname()}-4242")
+
+    lock = session.ProfileLock(settings.profile_dir)
+    lock.acquire()
+    lock.release()
+
+    assert chromium_lock_files(settings.profile_dir) == [
+        "SingletonCookie",
+        "SingletonLock",
+        "SingletonSocket",
+    ]
+
+
+def test_lock_is_left_alone_while_another_command_holds_the_profile(settings: Settings):
+    first = session.ProfileLock(settings.profile_dir)
+    first.acquire()
+    try:
+        stale_chromium_lock(settings.profile_dir, "3f2a9c1d0e4b-58")
+        with pytest.raises(session.ProfileInUseError):
+            session.ProfileLock(settings.profile_dir).acquire()
+        assert "SingletonLock" in chromium_lock_files(settings.profile_dir)
+    finally:
+        first.release()
 
 
 def test_verify_session(monkeypatch: pytest.MonkeyPatch, settings: Settings):
