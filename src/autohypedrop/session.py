@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import socket
 import sys
 from pathlib import Path
 from typing import IO
@@ -71,12 +73,61 @@ class ProfileLock:
                 "finish and try again"
             )
         self._handle = handle
+        clear_stale_browser_lock(self._profile_dir)
 
     def release(self) -> None:
         if self._handle is not None:
             _unlock(self._handle)
             self._handle.close()
             self._handle = None
+
+
+# Chromium's own profile lock. It names the browser that holds the profile as
+# "<hostname>-<pid>" and is left behind when that browser is killed instead of
+# closed (a stopped container, a login screen that timed out). Every container
+# has its own hostname, so Chromium then takes the profile for one in use on
+# "another computer" and refuses to start, forever.
+CHROMIUM_LOCK_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
+
+
+def _chromium_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        command = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return True  # No /proc to tell what it is; assume the worst.
+    return b"chrom" in command.lower()
+
+
+def clear_stale_browser_lock(profile_dir: Path) -> None:
+    """Remove Chromium's lock if the browser it names cannot still be running.
+
+    Only call this while holding :class:`ProfileLock`: that lock already proves
+    no AutoHypedrop browser, in this container or another sharing the data
+    volume, has the profile open. A Chromium on this machine that is still
+    alive keeps its lock, and Chromium reports it as before.
+    """
+    if sys.platform == "win32":
+        return  # Windows uses an ordinary lock file that the OS releases.
+    try:
+        owner = os.readlink(profile_dir / "SingletonLock")
+    except OSError:
+        return  # No lock, or not the symlink Chromium writes.
+    host, _, pid = owner.rpartition("-")
+    if host == socket.gethostname() and pid.isdigit() and _chromium_running(int(pid)):
+        return
+    for name in CHROMIUM_LOCK_FILES:
+        try:
+            (profile_dir / name).unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("browser_lock_not_removed", file=name, error=str(exc))
+            return
+    log.warning("stale_browser_lock_removed", owner=owner)
 
 
 def launch_profile(
@@ -98,8 +149,8 @@ def launch_profile(
         lock.release()
         if "ProcessSingleton" in str(exc) or "profile appears to be in use" in str(exc):
             raise ProfileInUseError(
-                f"the browser profile at {settings.profile_dir} is open in another browser; "
-                "close it and try again"
+                f"the browser profile at {settings.profile_dir} is open in another browser "
+                "on this machine; close it and try again"
             ) from exc
         raise
     except BaseException:

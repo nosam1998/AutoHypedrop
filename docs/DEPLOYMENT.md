@@ -188,11 +188,15 @@ container. Keep both machines on the same image version.
 A login screen or another run still has the profile open. Wait for it to
 finish, or check `docker compose ps` and stop it with `make down`.
 
-**"the browser profile ... is open in another browser"**
-Another Chromium has `data/profile` open, for example a desktop browser
-from `make local-login`. Close it. If none is open, run `make down`,
-delete `data/profile/Singleton*` (a lock a crashed browser can leave
-behind), and try again.
+**"the browser profile ... is open in another browser on this machine"**
+A Chromium that is still running on this machine has `data/profile` open,
+for example a desktop browser from `make local-login`. Close it.
+
+A browser that was killed rather than closed (a stopped container, a login
+screen that timed out, a profile copied from another machine) leaves a lock
+in `data/profile/Singleton*`. Every command now removes such a lock by
+itself once it has checked that no other AutoHypedrop command has the
+profile open, so it no longer needs deleting by hand.
 
 **The login page at localhost:6080 doesn't load**
 Check that the login screen is running with `docker compose ps` and read
