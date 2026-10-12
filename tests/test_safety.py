@@ -40,12 +40,9 @@ def test_every_non_allowlisted_target_is_refused() -> None:
             actions().click(target, Untouchable())  # type: ignore[arg-type]
 
 
-def test_allowlist_is_exactly_the_free_actions() -> None:
-    assert {t.name for t in site.CLICK_ALLOWLIST} == {
-        "open_free_box",
-        "skip_animation",
-        "close_result",
-    }
+def test_allowlist_is_exactly_the_free_open_button() -> None:
+    # Results are confirmed by reloading and left by navigating, never by clicking.
+    assert {t.name for t in site.CLICK_ALLOWLIST} == {"open_free_box"}
 
 
 def test_dry_run_refuses_clicks_before_touching_browser() -> None:
@@ -89,18 +86,21 @@ def test_cost_pattern_catches_spending_labels(label: str) -> None:
     assert site.COST_PATTERN.search(label)
 
 
-@pytest.mark.parametrize("label", ["Open", "Claim", "Open free", "Close", "Skip", "Keep it"])
+@pytest.mark.parametrize("label", ["Open for Free", "Open", "Claim", "Close", "Skip", "Keep it"])
 def test_cost_pattern_allows_free_labels(label: str) -> None:
     assert not site.COST_PATTERN.search(label)
 
 
-@pytest.mark.parametrize("label", ["Open", "open", " Claim ", "Open free", "Claim now"])
+@pytest.mark.parametrize("label", ["Open for Free", "open for free", " OPEN FOR FREE "])
 def test_open_button_label_matches_free_labels(label: str) -> None:
     pattern = _name_pattern(site.OPEN_FREE_BOX)
     assert pattern.search(label)
 
 
-@pytest.mark.parametrize("label", ["Open for $5", "Open case", "Open 5x", "Reopen", "Opening..."])
+@pytest.mark.parametrize(
+    "label",
+    ["Free Try", "Open for $5", "Open for $2.00", "Open", "Open for Free x2", "Reopen for free"],
+)
 def test_open_button_label_rejects_other_labels(label: str) -> None:
     pattern = _name_pattern(site.OPEN_FREE_BOX)
     assert not pattern.search(label)
@@ -114,10 +114,8 @@ def _name_pattern(target: site.Target) -> re.Pattern[str]:
     return target(Capture())  # type: ignore[arg-type, return-value]
 
 
-def test_shipped_selectors_are_unverified_until_phase_0() -> None:
-    # Flip this test when docs/discovery.md is filled in and the selectors verified.
-    assert "open_free_box" in site.unverified_click_targets()
-    assert "free_drops_region" in site.unverified_click_targets()
+def test_click_target_and_its_scopes_are_verified() -> None:
+    assert site.unverified_click_targets() == []
 
 
 def test_pacer_stays_in_range() -> None:

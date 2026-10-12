@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
+from datetime import UTC, datetime
 from time import monotonic
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import Locator, Page, Request, Response
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from autohypedrop import site_selectors as site
@@ -97,120 +99,199 @@ def open_free_drops(page: Page, actions: SafeActions, settings: Settings) -> Non
     check_stop_conditions(page)
 
 
-def enumerate_boxes(page: Page) -> list[FreeBox]:
-    cards = _cards(page)
+def _free_tiles(page: Page) -> tuple[list[FreeBox], list[tuple[FreeBox, str]]]:
+    """Every tile in the grid, and the box pages of those explicitly labelled FREE."""
     names: Counter[str] = Counter()
-    boxes = []
-    for index in range(cards.count()):
-        card = cards.nth(index)
-        name = _text(site.CARD_NAME(card)) or f"box #{index + 1}"
-        names[name] += 1
-        if names[name] > 1:
-            name = f"{name} ({names[name]})"
-
-        cooldown_text = _text(site.CARD_COOLDOWN(card))
-        cooldown = parse_countdown(cooldown_text) if cooldown_text else None
-        button = site.OPEN_FREE_BOX(card).filter(visible=True)
-        claimable = cooldown_text is None and button.count() == 1 and button.is_enabled()
-        boxes.append(FreeBox(name, index, claimable, cooldown))
-
-    log.info(
-        "boxes_found",
-        total=len(boxes),
-        claimable=[b.name for b in boxes if b.claimable],
-        cooling_down={b.name: b.cooldown_seconds for b in boxes if b.cooldown_seconds},
-    )
-    return boxes
-
-
-def inspect_linked_boxes(page: Page, actions: SafeActions, settings: Settings) -> list[FreeBox]:
-    """Read availability on individual level-box pages. Never opens a box."""
-    if not actions.dry_run:
-        raise needs_human(
-            Reason.UNVERIFIED_SELECTORS,
-            "Individual box pages support dry-run discovery only. The opening and result "
-            "flow still needs verification from a recorded manual opening.",
-        )
-    boxes = []
+    boxes: list[FreeBox] = []
     destinations: list[tuple[FreeBox, str]] = []
     for index, card in enumerate(_cards(page).all()):
         link = site.FREE_BOX_LINK(card).filter(visible=True)
         if link.count() != 1:
             raise needs_human(Reason.SELECTOR_MISSING, "expected one level-box link per tile")
-        box = FreeBox(link.inner_text().strip(), index, False)
+        name = link.inner_text().strip()
+        names[name] += 1
+        if names[name] > 1:
+            name = f"{name} ({names[name]})"
+        box = FreeBox(name, index, False)
         boxes.append(box)
         # Do not visit locked or priced tiles, even if their markup contains links.
         if site.FREE_BOX_LABEL(card).filter(visible=True).count() == 1:
             destinations.append((box, _site_link(page, link.get_attribute("href"))))
-
-    for box, url in destinations:
-        actions.goto(url)
-        form = site.BOX_OPEN_FORM(page).filter(visible=True)
-        try:
-            form.first.wait_for(state="visible", timeout=settings.timeout_ms)
-        except PlaywrightTimeoutError:
-            check_stop_conditions(page)
-            raise needs_human(
-                Reason.SELECTOR_MISSING, f"no opening controls found for {box.name!r}"
-            ) from None
-        check_stop_conditions(page)
-        if form.count() != 1:
-            raise needs_human(Reason.SELECTOR_MISSING, "expected one box opening form")
-        cooldown_text = _text(site.CARD_COOLDOWN(form))
-        cooldown = parse_countdown(cooldown_text) if cooldown_text else None
-        button = site.LINKED_FREE_OPEN(form).filter(visible=True)
-        claimable = cooldown_text is None and button.count() == 1 and button.is_enabled()
-        boxes[box.index] = FreeBox(box.name, box.index, claimable, cooldown)
-
-    log.info(
-        "boxes_found",
-        total=len(boxes),
-        claimable=[box.name for box in boxes if box.claimable],
-        cooling_down={box.name: box.cooldown_seconds for box in boxes if box.cooldown_seconds},
-    )
-    return boxes
+    return boxes, destinations
 
 
-def _wait_for_result(page: Page, actions: SafeActions, settings: Settings, box: FreeBox) -> Locator:
-    result = site.RESULT_DIALOG(page).filter(visible=True)
-    skip = site.SKIP_ANIMATION(page).filter(visible=True)
+def read_box_page(
+    page: Page, actions: SafeActions, settings: Settings, box: FreeBox, url: str
+) -> FreeBox:
+    """Load a box's own page and read whether it can be opened for free right now."""
+    actions.goto(url)
+    form = site.BOX_OPEN_FORM(page).filter(visible=True)
     try:
-        result.or_(skip).first.wait_for(state="visible", timeout=settings.result_timeout_ms)
-        if result.count() == 0:
-            actions.click(site.SKIP_ANIMATION, page)
-            result.first.wait_for(state="visible", timeout=settings.result_timeout_ms)
+        form.first.wait_for(state="visible", timeout=settings.timeout_ms)
     except PlaywrightTimeoutError:
-        check_stop_conditions(page, dialog_expected=True)
+        check_stop_conditions(page)
         raise needs_human(
-            Reason.SELECTOR_MISSING,
-            f"opened {box.name!r} but no result appeared; check the account inventory",
+            Reason.SELECTOR_MISSING, f"no opening controls found for {box.name!r}"
         ) from None
-    check_stop_conditions(page, dialog_expected=True)
+    check_stop_conditions(page)
+    if form.count() != 1:
+        raise needs_human(Reason.SELECTOR_MISSING, "expected one box opening form")
+    cooldown_text = _text(site.BOX_COOLDOWN(form))
+    cooldown = parse_countdown(cooldown_text) if cooldown_text else None
+    button = site.OPEN_FREE_BOX(form).filter(visible=True)
+    claimable = cooldown_text is None and button.count() == 1 and button.is_enabled()
+    return FreeBox(box.name, box.index, claimable, cooldown)
+
+
+class _Traffic:
+    """Watches the page's requests while a box opens, to tell when it has settled.
+
+    Opening is settled once the site has made at least one request and the
+    network has then been quiet for a while. Non-GET responses from the site
+    are kept as evidence of what the opening did.
+    """
+
+    def __init__(self, page: Page, settings: Settings) -> None:
+        self._page = page
+        self._site = (urlsplit(settings.base_url).hostname or "").removeprefix("www.")
+        self.in_flight = 0
+        self.requests = 0
+        self.quiet_ms = 0
+        self.responses: list[Response] = []
+
+    def __enter__(self) -> _Traffic:
+        self._page.on("request", self._started)
+        self._page.on("requestfinished", self._ended)
+        self._page.on("requestfailed", self._ended)
+        self._page.on("response", self._responded)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._page.remove_listener("request", self._started)
+        self._page.remove_listener("requestfinished", self._ended)
+        self._page.remove_listener("requestfailed", self._ended)
+        self._page.remove_listener("response", self._responded)
+
+    def _started(self, _request: Request) -> None:
+        self.in_flight += 1
+        self.requests += 1
+        self.quiet_ms = 0
+
+    def _ended(self, _request: Request) -> None:
+        self.in_flight = max(0, self.in_flight - 1)
+        self.quiet_ms = 0
+
+    def _responded(self, response: Response) -> None:
+        host = urlsplit(response.url).hostname or ""
+        same_site = host == self._site or host.endswith(f".{self._site}")
+        if same_site and response.request.method != "GET":
+            self.responses.append(response)
+
+    def tick(self, ms: int) -> None:
+        if self.requests and not self.in_flight:
+            self.quiet_ms += ms
+
+
+_POLL_MS = 250
+
+
+def _wait_for_opening(page: Page, settings: Settings, traffic: _Traffic, box: FreeBox) -> Locator:
+    """Wait for the result to show, or for the opening's network traffic to finish.
+
+    Running out of time is not an error here: reloading the box page afterwards
+    is what decides whether the opening went through.
+    """
+    result = site.RESULT_DIALOG(page).filter(visible=True)
+    for _ in range(math.ceil(settings.result_timeout_ms / _POLL_MS)):
+        if result.count() or traffic.quiet_ms >= settings.opening_settle_ms:
+            break
+        page.wait_for_timeout(_POLL_MS)
+        traffic.tick(_POLL_MS)
+    else:
+        log.warning("opening_not_settled", box=box.name, requests=traffic.requests)
     return result.first
 
 
-def claim_box(page: Page, actions: SafeActions, settings: Settings, box: FreeBox) -> ClaimedItem:
-    card = _cards(page).nth(box.index)
-    actions.click(site.OPEN_FREE_BOX, card)
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "box"
 
-    dialog = _wait_for_result(page, actions, settings, box)
-    claimed = ClaimedItem(
-        box=box.name,
-        item=_text(site.RESULT_ITEM_NAME(dialog)),
-        value=_text(site.RESULT_ITEM_VALUE(dialog)),
+
+def _save_opening(page: Page, settings: Settings, box: FreeBox, traffic: _Traffic) -> str | None:
+    """Keep a screenshot and the site's responses from an opening, for the operator.
+
+    Which element shows the won item has not been verified yet, so the
+    screenshot is how the operator sees what was won. The responses are what a
+    future parser for the result would be written from. Both stay in the
+    private data directory.
+    """
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    base = settings.openings_dir / f"{stamp}-{_slug(box.name)}"
+    screenshot: str | None = None
+    try:
+        settings.openings_dir.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=base.with_suffix(".png"), full_page=True)
+        screenshot = str(base.with_suffix(".png"))
+    except (PlaywrightError, OSError) as exc:
+        log.warning("opening_screenshot_failed", error=str(exc).splitlines()[0])
+
+    evidence = []
+    for response in traffic.responses:
+        entry: dict[str, object] = {
+            "url": urlunsplit(urlsplit(response.url)._replace(query="", fragment="")),
+            "method": response.request.method,
+            "status": response.status,
+        }
+        try:
+            if "json" in (response.headers.get("content-type") or ""):
+                entry["body"] = response.json()
+        except (PlaywrightError, ValueError):
+            entry["body"] = None
+        evidence.append(entry)
+    try:
+        base.with_suffix(".json").write_text(
+            json.dumps({"box": box.name, "url": page.url, "responses": evidence}, indent=2)
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        log.warning("opening_evidence_failed", error=str(exc))
+    return screenshot
+
+
+def open_box(page: Page, actions: SafeActions, settings: Settings, box: FreeBox) -> ClaimedItem:
+    """Open one box from its own page. The caller must reload to confirm it went through."""
+    budget = actions.budget
+    if budget.page_loads >= budget.max_page_loads:
+        # Never open a box without a page load left to confirm the opening.
+        raise needs_human(
+            Reason.BUDGET_EXCEEDED,
+            f"page-load cap of {budget.max_page_loads} reached before opening {box.name!r}",
+        )
+    form = site.BOX_OPEN_FORM(page).filter(visible=True)
+    with _Traffic(page, settings) as traffic:
+        actions.click(site.OPEN_FREE_BOX, form)
+        dialog = _wait_for_opening(page, settings, traffic, box)
+        check_stop_conditions(page, dialog_expected=True)
+        claimed = ClaimedItem(
+            box=box.name,
+            item=_text(site.RESULT_ITEM_NAME(dialog)),
+            value=_text(site.RESULT_ITEM_VALUE(dialog)),
+            screenshot=_save_opening(page, settings, box, traffic),
+        )
+    log.info(
+        "box_opened",
+        box=claimed.box,
+        item=claimed.item,
+        value=claimed.value,
+        screenshot=claimed.screenshot,
     )
-    log.info("box_opened", box=claimed.box, item=claimed.item, value=claimed.value)
-
-    if site.CLOSE_RESULT(dialog).filter(visible=True).count() == 1:
-        actions.click(site.CLOSE_RESULT, dialog)
     return claimed
 
 
 def claim_all(page: Page, actions: SafeActions, settings: Settings, result: RunResult) -> None:
-    """Open every claimable free box, reloading the page after each for fresh state.
+    """Visit every box the rewards grid marks FREE and open the ones that are claimable.
 
-    Progress is written into ``result`` as it happens, so a run stopped partway
-    still reports what it opened.
+    Each opening is confirmed by reloading the box's page; a box that still
+    looks claimable is never opened twice. Progress is written into ``result``
+    as it happens, so a run stopped partway still reports what it opened.
     """
     open_free_drops(page, actions, settings)
     reset = site.DAILY_FREE_RESET(page).filter(visible=True)
@@ -219,27 +300,36 @@ def claim_all(page: Page, actions: SafeActions, settings: Settings, result: RunR
     # Read before leaving rewards for individual box pages. This timer is
     # displayed even while boxes are claimable, so do not use it as a cooldown.
     reset_deadline = monotonic() + reset_seconds if reset_seconds is not None else None
-    if page.locator("cw-free-boxes-grid").filter(visible=True).count():
-        result.boxes_seen = inspect_linked_boxes(page, actions, settings)
-    else:
-        result.boxes_seen = enumerate_boxes(page)
-    if not result.boxes_seen:
-        raise needs_human(Reason.SELECTOR_MISSING, "the Free Drops section has no box cards")
 
-    if not actions.dry_run:
-        attempted: set[str] = set()
-        while claimable := [b for b in result.boxes_seen if b.claimable]:
-            box = claimable[0]
-            if box.name in attempted:
+    result.boxes_seen, destinations = _free_tiles(page)
+    if not result.boxes_seen:
+        raise needs_human(Reason.SELECTOR_MISSING, "the Free Drop grid has no box tiles")
+
+    for box, url in destinations:
+        seen = read_box_page(page, actions, settings, box, url)
+        if seen.claimable and not actions.dry_run:
+            claimed = open_box(page, actions, settings, seen)
+            # Reported as opened even if confirming it fails; withdrawn only when
+            # the reload shows the box is still claimable.
+            result.claimed.append(claimed)
+            if claimed.screenshot:
+                result.screenshot = claimed.screenshot
+            seen = read_box_page(page, actions, settings, seen, url)
+            if seen.claimable:
+                result.claimed.remove(claimed)
+                shot = f" Page after opening: {claimed.screenshot}" if claimed.screenshot else ""
                 raise needs_human(
                     Reason.CLAIM_NOT_COMMITTED,
-                    f"{box.name!r} is still claimable after opening it; not trying again",
+                    f"{box.name!r} is still claimable after opening it; not trying again.{shot}",
                 )
-            attempted.add(box.name)
-            result.claimed.append(claim_box(page, actions, settings, box))
-            open_free_drops(page, actions, settings)
-            result.boxes_seen = enumerate_boxes(page)
+        result.boxes_seen[box.index] = seen
 
+    log.info(
+        "boxes_found",
+        total=len(result.boxes_seen),
+        claimable=[b.name for b in result.boxes_seen if b.claimable],
+        cooling_down={b.name: b.cooldown_seconds for b in result.boxes_seen if b.cooldown_seconds},
+    )
     cooldowns = [b.cooldown_seconds for b in result.boxes_seen if b.cooldown_seconds is not None]
     if reset_deadline is not None:
         cooldowns.append(max(0, math.ceil(reset_deadline - monotonic())))

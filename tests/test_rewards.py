@@ -1,26 +1,34 @@
 """Recorded rewards layout and navigation, without touching the live site."""
 
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Route
 
 from autohypedrop import freedrops
 from autohypedrop.cycle import run_cycle
 from autohypedrop.outcome import Outcome, Reason
-from tests.fakesite import FakeSite
+from tests.fakesite import Box, FakeSite
 
 GRID = (Path(__file__).parent / "fixtures" / "rewards-linked-boxes.html").read_text()
 
 
 class RewardsSite(FakeSite):
+    """The recorded rewards grid, with box pages from the synthetic site."""
+
     def __init__(self, region: str = "na") -> None:
-        super().__init__()
+        super().__init__(
+            boxes=[
+                Box("Level 2", region=region),
+                Box("Level 10", region=region),
+                Box("Level 20", region=region),
+                Box("Level 70", region=region),
+            ],
+            rewards_path=f"/{region}/rewards",
+        )
         self.region = region
         self.link = f"/{region}/rewards"
         self.extra_link = ""
-        self.free_controls = "<button>Open for Free</button><button>Free Try</button>"
+        self.free_controls: str | None = None
         self.reset = ""
         self.box_cooldown = "2h 30m"
 
@@ -32,25 +40,15 @@ class RewardsSite(FakeSite):
             f'<footer><a href="{self.link}">Free Drop</a>{self.extra_link}</footer>'
         )
 
-    def _handle(self, route: Route) -> None:
-        path = urlsplit(route.request.url).path
-        if path == f"/{self.region}/rewards":
-            self.page_loads.append(path)
-            route.fulfill(
-                content_type="text/html",
-                body=self._page(self.reset + GRID.replace("/na/", f"/{self.region}/")),
-            )
-        elif path.startswith(f"/boxes/view/{self.region}/level-"):
-            self.page_loads.append(path)
-            controls = self.free_controls
-            if path.endswith("level-10") and self.box_cooldown:
-                controls = f"<p>{self.box_cooldown}</p><button disabled>Open for Free</button>"
-            route.fulfill(
-                content_type="text/html",
-                body=self._page(f"<cw-box-open-form>{controls}</cw-box-open-form>"),
-            )
-        else:
-            super()._handle(route)
+    def _grid(self) -> str:
+        return self.reset + GRID.replace("/na/", f"/{self.region}/")
+
+    def _controls(self, box: Box) -> str:
+        if box.name == "Level 10" and self.box_cooldown:
+            return f"<p>{self.box_cooldown}</p><button disabled>Open for Free</button>"
+        if box.cooldown or self.free_controls is None:
+            return super()._controls(box)
+        return self.free_controls
 
 
 @pytest.mark.parametrize("region", ["na", "eu"])
@@ -133,15 +131,23 @@ def test_linked_box_discovery_respects_page_load_budget(context, settings):
     assert site.page_loads == ["/", "/na/rewards"]
 
 
-def test_linked_box_opening_remains_unverified(context, settings):
+def test_opens_free_boxes_from_recorded_grid(context, settings):
     site = RewardsSite()
     site.install(context)
 
     result = run_cycle(context, settings, dry_run=False)
 
-    assert result.reason is Reason.UNVERIFIED_SELECTORS
-    assert site.page_loads == ["/", "/na/rewards"]
-    assert site.opens == []
+    assert result.outcome is Outcome.CLAIMED, result.detail
+    assert site.opens == ["Level 2"]
+    assert site.page_loads == [
+        "/",
+        "/na/rewards",
+        "/boxes/view/na/level-2",
+        "/boxes/view/na/level-2",
+        "/boxes/view/na/level-10",
+    ]
+    assert site.free_tries == []
+    assert site.paid_requests == []
 
 
 def test_recorded_daily_reset_is_reported_without_blocking_available_boxes(

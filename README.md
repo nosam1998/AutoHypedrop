@@ -4,11 +4,12 @@ Self-hosted automation that opens the free drops on a single hypedrop.com
 account (signed in via Google) on a schedule, and pings you when it works
 or when it needs a human.
 
-Status: **Phase 1 code in place; Phase 0 discovery still to do.** The
-selectors in `src/autohypedrop/site_selectors.py` are educated guesses that
-have never been checked against the live site. Until they are verified,
-`autohypedrop run` refuses to click anything; `run --dry-run` works and is how
-you verify them. See [docs/discovery.md](docs/discovery.md) and the
+Status: **Phase 1: opens free boxes; reading the prize is not verified yet.**
+`autohypedrop run` opens every box the rewards page marks FREE, using only
+selectors checked against the live site. Which element shows the won item has
+not been recorded yet, so each opening is saved as a screenshot (attached to the
+Discord message) instead of always naming the item. See
+[docs/discovery.md](docs/discovery.md) and the
 [Product Requirements Document](docs/PRD.md).
 
 ## Principles
@@ -40,7 +41,7 @@ docker compose up -d login
 # 2. See what would be opened, without clicking anything.
 docker compose run --rm autohypedrop run --dry-run
 
-# 3. Open the free drops (once the selectors are verified).
+# 3. Open the free drops.
 docker compose run --rm autohypedrop run
 ```
 
@@ -112,21 +113,29 @@ to claim or kill switch engaged, `3` needs a human (session expired, challenge,
 unexpected page, safety stop). Every run ends with one JSON log line,
 `run_end`, carrying the outcome, the items won and the duration.
 
-The dry run follows the site's Free Drop navigation link (for example,
-`/na/rewards`) and checks eligible level boxes on their individual pages.
-It also reports the shared daily reset countdown from the rewards page. That
-timer can appear while boxes are available; it does not make them unavailable.
-Recording saves snapshots for updating the code; it does not train or configure
-the automation automatically. The recorded individual-box opening/result flow
-has not yet been verified, so automatic claims remain blocked. See
-`docs/discovery.md` for the verified discovery behavior and remaining work.
+### How a run opens boxes
 
-For a useful opening recording, run `make record`, capture an eligible box before
-opening it, capture the finished prize result, then capture its controls after
-closing the result. Press Enter in the terminal for each snapshot and finish
-with `q` so the trace is saved before Chromium closes. Snapshot filenames and
-`index.jsonl` now use the page URL captured with the HTML, including after
-in-page navigation. Keep `data/` and any `data.zip` archive private.
+1. Load the home page and confirm the saved session.
+2. Follow the Free Drop link (for example, `/na/rewards`) and read the shared
+   daily reset countdown. That timer shows even while boxes are available; it
+   does not make them unavailable.
+3. For each tile in the free-box grid labelled **FREE** (never LOCKED or priced
+   tiles), load the box's own page. If it shows an enabled **Open for Free**
+   button and no countdown, click that button. Nothing else is ever clicked:
+   not Free Try, not a priced Open, not Sell.
+4. Wait for the result, or for the site's network traffic to go quiet, then save
+   a screenshot and the site's responses to `data/openings/`.
+5. Reload the box's page to confirm the opening went through. A box that still
+   looks claimable is not opened again; the run stops and asks for help.
+
+A run with N free boxes uses 2 + 2N page loads. `--dry-run` does steps 1 to 3
+without clicking.
+
+The files in `data/openings/` are the evidence still missing from Phase 0: once
+the result screen is known, the item name can be read from it (or from the
+saved responses) instead of only shown in the screenshot. `make record` remains
+available for capturing pages by hand. Keep `data/` and any `data.zip` archive
+private.
 
 ## Discord warnings
 
@@ -157,18 +166,21 @@ Run it once a day from the host's crontab, at an odd minute:
 
 ## Safety rails
 
-- **Click allowlist.** Only three controls can ever be clicked: a free box's
-  open button, "skip animation", and the result dialog's close button. Any
-  other click raises before the browser is touched.
+- **Click allowlist.** Only one control can ever be clicked: a box page's
+  **Open for Free** button. Any other click raises before the browser is
+  touched. The result is left by navigating away, not by clicking.
+- **Verified selectors only.** `run` refuses to click while that button, or any
+  locator that decides which page it is clicked on, lacks a `verified` date.
 - **Cost guard.** An allowlisted control whose label, title or value mentions
   money (`$`, `deposit`, `buy`, `sell`, `upgrade`, …) is never clicked.
-- **Scoping.** The open button is only looked for inside a free-drop card,
-  inside the Free Drops section, and its label must be exactly "Open",
-  "Claim", "Open free" or similar.
+- **Scoping.** Only box pages linked from tiles labelled FREE in the rewards
+  grid are visited, and the button is only looked for inside that page's
+  opening form. Its label must be exactly "Open for Free".
 - **Budgets.** At most `AHD_MAX_CLICKS_PER_RUN` clicks and
   `AHD_MAX_PAGE_LOADS_PER_RUN` page loads per run.
 - **No retries into trouble.** A box still claimable after being opened is
-  not opened again; the run stops and asks for help.
+  not opened again; the run stops and asks for help. A box is never opened
+  without a page load left in the budget to confirm it.
 
 ## Development
 
@@ -181,10 +193,11 @@ pytest
 ```
 
 The tests drive real Chromium against a synthetic site (`tests/fakesite.py`)
-built to match the current selector guesses.
+built to match the structure recorded from the live site.
 
 ## Roadmap
 
 1. Phase 0: discovery spike against the live site ([docs/discovery.md](docs/discovery.md)).
-2. Phase 1: `login` / `run` commands, Docker image, Discord alerts. *(code in place)*
+2. Phase 1: `login` / `run` commands, Docker image, Discord alerts. *(opening
+   free boxes; reading the prize still to verify)*
 3. Phase 2: unattended daemon with scheduling, history, and `v1.0.0`.

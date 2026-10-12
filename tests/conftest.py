@@ -38,6 +38,7 @@ def settings(tmp_path: Path) -> Settings:
         pace_max_ms=0,
         timeout_ms=2_000,
         result_timeout_ms=3_000,
+        opening_settle_ms=300,
     )
 
 

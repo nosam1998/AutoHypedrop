@@ -58,6 +58,18 @@ def test_claimed_message_lists_items_and_next_reset() -> None:
     )
 
 
+def test_claimed_message_points_to_screenshot_when_item_unread() -> None:
+    result = RunResult(
+        Outcome.CLAIMED,
+        claimed=[ClaimedItem("Level 2", None, None)],
+        screenshot="data/openings/x.png",
+    )
+    assert format_message(result) == (
+        "✅ Opened 1 free box: an unknown item from Level 2\n"
+        "The screenshot shows the last box opened; there is one for each in data/openings/."
+    )
+
+
 def test_captcha_warning_explains_and_includes_page_and_progress() -> None:
     result = RunResult(
         Outcome.NEEDS_HUMAN,
