@@ -174,15 +174,16 @@ def test_recorded_daily_reset_is_reported_without_blocking_available_boxes(
     ("timer", "expected"),
     [
         ("Resets in 1 h 2 m 3 s", 3723),
-        ("Resets in 23 h 22 m 15 s", 9000),  # Per-box cooldown is sooner.
+        ("Resets in 23 h 22 m 15 s", 84135),
         ("Resets in 0 h 0 m 0 s", 0),
-        ("Loading…", 9000),
+        ("Loading…", None),
     ],
 )
-def test_daily_reset_and_box_cooldown_report_earliest_time(
+def test_daily_reset_is_used_when_final_crate_shows_no_countdown(
     context, settings, monkeypatch, timer, expected
 ):
     site = RewardsSite()
+    site.box_cooldown = ""
     site.reset = f"<cw-daily-free-countdown>{timer}</cw-daily-free-countdown>"
     site.install(context)
     monkeypatch.setattr(freedrops, "monotonic", lambda: 100.0)
@@ -191,6 +192,17 @@ def test_daily_reset_and_box_cooldown_report_earliest_time(
 
     assert result.outcome is Outcome.DRY_RUN
     assert result.next_reset_seconds == expected
+
+
+def test_final_crate_countdown_wins_over_daily_reset(context, settings, monkeypatch):
+    site = RewardsSite()  # Level 10, the final FREE crate, shows 2h 30m.
+    site.reset = "<cw-daily-free-countdown>Resets in 1 h 2 m 3 s</cw-daily-free-countdown>"
+    site.install(context)
+    monkeypatch.setattr(freedrops, "monotonic", lambda: 100.0)
+
+    result = run_cycle(context, settings, dry_run=True)
+
+    assert result.next_reset_seconds == 2 * 3600 + 30 * 60
 
 
 def test_unrelated_or_hidden_countdowns_do_not_set_daily_reset(context, settings):

@@ -54,7 +54,9 @@ def test_claims_every_claimable_box_and_nothing_else(context, settings):
         "/boxes/view/na/level-10",
     ]
     assert [b.claimable for b in result.boxes_seen] == [False] * 5
-    assert result.next_reset_seconds == 12 * 3600 + 30 * 60
+    # The final crate opened (Level 10) now counts down 23h 59m; Level 5's sooner
+    # timer does not set the next opening.
+    assert result.next_reset_seconds == 23 * 3600 + 59 * 60
 
 
 def test_opening_keeps_screenshot_and_responses(context, settings):
@@ -275,3 +277,10 @@ def test_box_opened_before_a_stop_is_still_reported(context, settings):
 
     assert result.reason is Reason.CHALLENGE
     assert result.claimed == [ClaimedItem("Level 2", "Pin", "$0.12")]
+
+
+def test_next_opening_falls_back_to_soonest_timer_without_final_countdown(context, settings):
+    site = FakeSite(boxes=[Box("Level 2", cooldown="1h 0m"), Box("Level 10")])
+    result = run(site, context, settings, dry_run=True)
+
+    assert result.next_reset_seconds == 3600

@@ -7,8 +7,8 @@ VENV    ?= .venv
 BIN     := $(VENV)/bin
 
 .DEFAULT_GOAL := help
-.PHONY: help setup build pull login dry-run run record pause resume cron update shell down \
-        install lint fmt typecheck test check local-login local-dry-run local-run local-record clean
+.PHONY: help setup build pull login dry-run run start stop logs record pause resume update shell down \
+        install lint fmt typecheck test check local-login local-dry-run local-run local-daemon local-record clean
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -43,6 +43,16 @@ dry-run: setup ## Find claimable free drops without opening them
 run: setup ## Run one claim cycle now
 	$(COMPOSE) run --rm autohypedrop run
 
+start: setup ## Keep opening the free boxes at every reset, in the background
+	$(COMPOSE) --profile daemon up -d daemon
+	@echo "Started. 'make logs' follows it; 'make stop' stops it."
+
+stop: ## Stop the background daemon
+	$(COMPOSE) --profile daemon stop daemon
+
+logs: ## Follow the background daemon's output
+	$(COMPOSE) --profile daemon logs -f daemon
+
 record: setup ## Phase 0: record a manual walk-through at http://localhost:6080/vnc.html
 	$(COMPOSE) run --rm --service-ports login record
 
@@ -54,9 +64,6 @@ resume: ## Kill switch off
 	@rm -f data/KILL
 	@echo "Resumed."
 
-cron: ## Print a crontab line that runs a claim cycle every day
-	@echo "17 9 * * * cd $(CURDIR) && $(COMPOSE) run --rm autohypedrop run >> data/cron.log 2>&1"
-
 update: setup ## Pull the latest image, or rebuild if there is none to pull
 	$(COMPOSE) pull autohypedrop || $(COMPOSE) build autohypedrop
 
@@ -64,7 +71,7 @@ shell: setup ## Open a root shell in a fresh container
 	$(COMPOSE) run --rm --entrypoint /bin/bash autohypedrop
 
 down: ## Stop and remove any AutoHypedrop containers
-	$(COMPOSE) --profile login down
+	$(COMPOSE) --profile login --profile daemon down
 
 ##@ Develop locally (no Docker)
 
@@ -101,6 +108,9 @@ local-dry-run: install ## Dry-run claim cycle on this machine
 
 local-run: install ## Claim cycle on this machine
 	$(BIN)/autohypedrop run
+
+local-daemon: install ## Keep opening at every reset, on this machine
+	$(BIN)/autohypedrop daemon
 
 local-record: install ## Phase 0 recording on this machine
 	$(BIN)/autohypedrop record

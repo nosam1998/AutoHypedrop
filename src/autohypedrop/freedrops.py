@@ -330,6 +330,13 @@ def claim_all(page: Page, actions: SafeActions, settings: Settings, result: RunR
         claimable=[b.name for b in result.boxes_seen if b.claimable],
         cooling_down={b.name: b.cooldown_seconds for b in result.boxes_seen if b.cooldown_seconds},
     )
+    # The next opening is due when the final crate's own countdown runs out. Without
+    # one (it has not been opened, or shows no timer), use the soonest timer seen.
+    final = result.boxes_seen[destinations[-1][0].index] if destinations else None
+    if final is not None and final.cooldown_seconds is not None:
+        result.next_reset_seconds = final.cooldown_seconds
+        log.info("next_opening_from_final_crate", box=final.name, seconds=final.cooldown_seconds)
+        return
     cooldowns = [b.cooldown_seconds for b in result.boxes_seen if b.cooldown_seconds is not None]
     if reset_deadline is not None:
         cooldowns.append(max(0, math.ceil(reset_deadline - monotonic())))

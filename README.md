@@ -106,6 +106,7 @@ autohypedrop run --dry-run
 |---|---|
 | `autohypedrop login` | Automatically reuses a valid saved session; otherwise opens Chromium for Google sign-in and checks the result. Add `--force` to always open the sign-in window. |
 | `autohypedrop run` | One claim cycle. Add `--dry-run` to find claimable boxes without clicking. |
+| `autohypedrop daemon` | Keeps running: opens the free boxes, then waits for the next reset and repeats. |
 | `autohypedrop record` | Phase 0 helper: saves a Playwright trace, plus page snapshots on demand, while you browse by hand. |
 
 `run` exit codes: `0` claimed (or dry run found boxes), `1` error, `2` nothing
@@ -156,13 +157,22 @@ Every command then exits immediately without starting a browser.
 
 All settings are environment variables; see [.env.example](.env.example).
 
-## Scheduling (until the Phase 2 daemon)
+## Scheduling
 
-Run it once a day from the host's crontab, at an odd minute:
+`make start` runs the `daemon` in the background. It opens the free boxes,
+then waits for the **next reset** rather than a fixed time or 24 hours:
 
-```cron
-17 9 * * * cd /path/to/AutoHypedrop && docker compose run --rm autohypedrop run >> data/cron.log 2>&1
-```
+1. After opening, it reads the countdown on the final crate's page.
+2. If that page shows no countdown, it uses the soonest timer it saw, such as
+   the rewards page's "Resets in" countdown.
+3. It sleeps until that countdown runs out, plus one minute so the reset has
+   happened on the site, then opens the boxes again.
+
+Only when no countdown could be read, or a run failed, does it retry after
+`AHD_RETRY_MINUTES` (60), doubling after each failure in a row, up to 6 hours.
+The next run time is kept in `data/next-run.json`, so a restart or reboot
+resumes the wait. `make logs` follows it, `make stop` stops it, and
+`make pause` holds it without opening a browser until `make resume`.
 
 ## Safety rails
 
@@ -200,4 +210,4 @@ built to match the structure recorded from the live site.
 1. Phase 0: discovery spike against the live site ([docs/discovery.md](docs/discovery.md)).
 2. Phase 1: `login` / `run` commands, Docker image, Discord alerts. *(opening
    free boxes; reading the prize still to verify)*
-3. Phase 2: unattended daemon with scheduling, history, and `v1.0.0`.
+3. Phase 2: unattended daemon that follows the reset countdown *(in place)*; history and `v1.0.0`.

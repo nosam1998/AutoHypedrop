@@ -1,10 +1,9 @@
-# Phase 1 usage (one-shot runs; the scheduling daemon arrives in Phase 2):
+# Usage:
 #
 #   docker compose up -d login      # sign in via noVNC; the link is posted to Discord
 #   docker compose run --rm autohypedrop run --dry-run
 #   docker compose run --rm autohypedrop run
-#
-# See README.md for scheduling the run from host cron.
+#   docker compose --profile daemon up -d daemon   # keep opening at every reset
 
 x-autohypedrop: &autohypedrop
   image: ghcr.io/nosam1998/autohypedrop:latest
@@ -40,3 +39,11 @@ services:
       - "${AHD_VNC_BIND:-127.0.0.1}:6080:6080"
     restart: "no"
     profiles: ["login"]
+
+  # Opens the free boxes, then sleeps until the reset countdown runs out and
+  # opens them again. Survives reboots; `make stop` (or `make pause`) stops it.
+  daemon:
+    <<: *autohypedrop
+    command: ["daemon"]
+    restart: unless-stopped
+    profiles: ["daemon"]

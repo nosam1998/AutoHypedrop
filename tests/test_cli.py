@@ -15,7 +15,9 @@ def forbid_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cycle, "perform_run", fail)
 
 
-@pytest.mark.parametrize("command", [["run"], ["run", "--dry-run"], ["login"], ["record"]])
+@pytest.mark.parametrize(
+    "command", [["run"], ["run", "--dry-run"], ["daemon"], ["login"], ["record"]]
+)
 def test_kill_switch_stops_every_command(
     monkeypatch: pytest.MonkeyPatch, command: list[str]
 ) -> None:

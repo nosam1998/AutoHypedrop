@@ -1,4 +1,4 @@
-"""Command-line entry point: ``autohypedrop {login,run,record}``."""
+"""Command-line entry point: ``autohypedrop {login,run,daemon,record}``."""
 
 from __future__ import annotations
 
@@ -26,6 +26,12 @@ def _run(settings: Settings, args: argparse.Namespace) -> int:
     from autohypedrop.cycle import perform_run
 
     return perform_run(settings, dry_run=args.dry_run or settings.dry_run).exit_code
+
+
+def _daemon(settings: Settings, args: argparse.Namespace) -> int:
+    from autohypedrop.schedule import daemon
+
+    return daemon(settings)
 
 
 def _record(settings: Settings, args: argparse.Namespace) -> int:
@@ -63,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="find claimable boxes but never click anything",
     )
     run.set_defaults(handler=_run)
+
+    daemon = commands.add_parser(
+        "daemon",
+        help="keep running: open the free boxes, then wait for the final box's countdown",
+    )
+    daemon.set_defaults(handler=_daemon)
 
     record = commands.add_parser(
         "record",

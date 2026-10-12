@@ -8,9 +8,8 @@ session to open your free drops.
 > **Current status:** `run` opens every box the rewards page marks FREE.
 > Which element shows the won item has not been verified yet, so each opening
 > is saved as a screenshot in `data/openings/` and attached to the Discord
-> message (see [discovery.md](discovery.md)). Watch the first real run. There
-> is no built-in scheduler until Phase 2, so daily runs come from the host's
-> cron.
+> message (see [discovery.md](discovery.md)). Watch the first real run.
+> `make start` then keeps it going, opening the boxes again at each reset.
 
 ## What you need
 
@@ -33,7 +32,7 @@ make setup     # creates .env (with your PUID/PGID) and data/
 make build     # builds the image (or `make pull` once a release is published)
 make login     # one-time Google sign-in, see step 3
 make dry-run   # shows what would be opened, without clicking anything
-make cron      # prints a crontab line for a daily run
+make start     # keeps opening the free boxes at every reset
 ```
 
 ### 1. Configure
@@ -78,19 +77,21 @@ screen closes by itself after `AHD_LOGIN_TIMEOUT_MINUTES` (30 by default).
 To sign in from your phone instead, see
 [Logging in from your phone](../README.md#logging-in-from-your-phone).
 
-### 4. Check it, then schedule it
+### 4. Check it, then leave it running
 
 ```sh
 make dry-run   # lists the claimable free drops, opens nothing
 make run       # one real claim cycle: opens the free boxes
-make cron      # prints the crontab line; add it with `crontab -e`
+make start     # from now on, opens them again at every reset
+make logs      # follow it (Ctrl+C stops following, not the daemon)
 ```
 
-`make cron` prints a line like this, with your checkout's path filled in:
-
-```cron
-17 9 * * * cd /home/you/AutoHypedrop && docker compose run --rm autohypedrop run >> data/cron.log 2>&1
-```
+`make start` waits for the next reset, not a fixed time: after each run it
+reads the countdown on the final crate's page and runs again a minute after
+it reaches zero. Each wait is logged as `next_run_scheduled` and kept in
+`data/next-run.json`. The container restarts with Docker, so it survives
+reboots. After `git pull && make build`, run `make start` again to switch it
+to the new image.
 
 `run` exits with `0` when it claimed something, `2` when there was nothing
 to claim, `3` when it needs you (signed out, CAPTCHA, unexpected page) and
@@ -106,12 +107,14 @@ to claim, `3` when it needs you (signed out, CAPTCHA, unexpected page) and
 | `make login` | `docker compose up -d --force-recreate login`<br>`docker compose logs -f login` | One-time Google sign-in |
 | `make dry-run` | `docker compose run --rm autohypedrop run --dry-run` | Find free drops without opening them |
 | `make run` | `docker compose run --rm autohypedrop run` | One claim cycle now |
+| `make start` | `docker compose --profile daemon up -d daemon` | Keep opening at every reset, in the background |
+| `make stop` | `docker compose --profile daemon stop daemon` | Stop the background daemon |
+| `make logs` | `docker compose --profile daemon logs -f daemon` | Follow the background daemon |
 | `make record` | `docker compose run --rm --service-ports login record` | Phase 0: record a manual walk-through |
 | `make pause` | `touch data/KILL` | Kill switch on: every command exits before opening a browser |
 | `make resume` | `rm data/KILL` | Kill switch off |
-| `make cron` | (see above) | Print a crontab line for a daily run |
 | `make update` | `docker compose pull autohypedrop` | Move to the newest image |
-| `make down` | `docker compose --profile login down` | Stop and remove any containers |
+| `make down` | `docker compose --profile login --profile daemon down` | Stop and remove any containers |
 | `make shell` | `docker compose run --rm --entrypoint /bin/bash autohypedrop` | Root shell in a fresh container |
 
 Run `make help` for the full list, including the development targets.
@@ -122,10 +125,7 @@ Run `make help` for the full list, including the development targets.
 
 This is the simplest option: `make login` and the link both work on the
 same machine. With Docker Desktop, turn on *Start Docker Desktop when you
-sign in* so cron runs still work after a reboot. On macOS, cron needs
-Docker Desktop's `docker` on its `PATH`; if the cron log says
-`docker: command not found`, use the full path from `which docker` in the
-crontab line.
+sign in* so the daemon from `make start` comes back after a reboot.
 
 ### Raspberry Pi
 
@@ -175,8 +175,9 @@ container. Keep both machines on the same image version.
 - **Pausing:** `make pause` stops every run before it opens a browser;
   `make resume` undoes it. Setting `AHD_KILL_SWITCH=1` in `.env` does the
   same.
-- **What happened:** cron output goes to `data/cron.log`; screenshots of
-  problems land in `data/screenshots/`.
+- **What happened:** `make logs` shows the daemon's output; screenshots of
+  problems land in `data/screenshots/`, and of each opening in
+  `data/openings/`.
 - **Backups:** `data/profile/` holds your signed-in session. Treat it like a
   password: don't commit it, share it, or copy it to machines you don't
   trust. Both it and `.env` are already in `.gitignore` and

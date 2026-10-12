@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     pace_max_ms: int = Field(default=3000, ge=0)
     timeout_ms: int = Field(default=20_000, ge=1_000)
     result_timeout_ms: int = Field(default=30_000, ge=1_000)
+    # Daemon: it runs again when the reset countdown runs out. Only when no countdown
+    # was read, or the run failed, does it retry after this long (doubling after each
+    # failure in a row, up to 6 hours).
+    retry_minutes: int = Field(default=60, ge=1)
     # An opening counts as settled once the network has been quiet this long.
     opening_settle_ms: int = Field(default=5_000, ge=0)
 
@@ -113,6 +117,10 @@ class Settings(BaseSettings):
     @property
     def openings_dir(self) -> Path:
         return self.data_dir / "openings"
+
+    @property
+    def schedule_file(self) -> Path:
+        return self.data_dir / "next-run.json"
 
     @property
     def discovery_dir(self) -> Path:
